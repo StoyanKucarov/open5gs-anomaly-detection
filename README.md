@@ -9,25 +9,25 @@ This pack only covers **platform setup + data collection**. Analysis is out of s
 
 ## 1. Stack
 
-| Layer            | Tool                                     | Version   | Why this one |
-|------------------|------------------------------------------|-----------|--------------|
-| 5G core          | Open5GS (Gradiant Helm chart)            | 2.3.4     | Most complete OSS 5G core; all SBI NFs as separate pods → clean per-NF fault targeting |
-| RAN sim          | UERANSIM gNB + UEs (Gradiant Helm chart) | 0.2.6 / 0.1.2 | Standard pairing for Open5GS; works headless in k8s |
-| Orchestration    | k3d (k3s in Docker)                      | latest    | Single-host k8s, no cloud dependency, fast teardown |
-| Metrics          | kube-prometheus-stack                    | latest    | Bundles Prometheus + Grafana + node_exporter + cAdvisor + kube-state-metrics |
-| Logs             | Loki + Promtail                          | latest    | Promtail DaemonSet ships every pod's stdout to Loki; no app changes |
-| Traces           | Jaeger (all-in-one, in-memory)           | v4.7.0    | No code changes; in-mem is fine for short experiment windows |
-| Span source      | Beyla (eBPF auto-instrumentation)        | ≥ 3.9.5   | Hooks at kernel socket layer, sees Open5GS HTTP/2 prior-knowledge SBI calls. **Istio sidecars don't work** (Envoy can't proxy raw HTTP/2 without TLS/ALPN). 3.9.5+ is required — earlier versions hit the kernel verifier's 1M-instruction BPF limit. |
-| Fault injection  | Chaos Mesh                               | 2.7.2     | Native k8s CRDs (StressChaos / PodChaos / NetworkChaos), no test-harness code |
-| Collection       | Python 3 + `requests`                    | —         | `experiments/collect.py` queries Prometheus / Loki / Jaeger HTTP APIs |
+| Layer           | Tool                                     | Version       | Why this one                                                                                                                                                                                                                                          |
+| --------------- | ---------------------------------------- | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 5G core         | Open5GS (Gradiant Helm chart)            | 2.3.4         | Most complete OSS 5G core; all SBI NFs as separate pods → clean per-NF fault targeting                                                                                                                                                                |
+| RAN sim         | UERANSIM gNB + UEs (Gradiant Helm chart) | 0.2.6 / 0.1.2 | Standard pairing for Open5GS; works headless in k8s                                                                                                                                                                                                   |
+| Orchestration   | kind (Kubernetes in Docker)              | latest        | Single-host k8s, no cloud dependency, fast teardown                                                                                                                                                                                                   |
+| Metrics         | kube-prometheus-stack                    | latest        | Bundles Prometheus + Grafana + node_exporter + cAdvisor + kube-state-metrics                                                                                                                                                                          |
+| Logs            | Loki + Promtail                          | latest        | Promtail DaemonSet ships every pod's stdout to Loki; no app changes                                                                                                                                                                                   |
+| Traces          | Jaeger (all-in-one, in-memory)           | v4.7.0        | No code changes; in-mem is fine for short experiment windows                                                                                                                                                                                          |
+| Span source     | Beyla (eBPF auto-instrumentation)        | ≥ 3.9.5       | Hooks at kernel socket layer, sees Open5GS HTTP/2 prior-knowledge SBI calls. **Istio sidecars don't work** (Envoy can't proxy raw HTTP/2 without TLS/ALPN). 3.9.5+ is required — earlier versions hit the kernel verifier's 1M-instruction BPF limit. |
+| Fault injection | Chaos Mesh                               | 2.7.2         | Native k8s CRDs (StressChaos / PodChaos / NetworkChaos), no test-harness code                                                                                                                                                                         |
+| Collection      | Python 3 + `requests`                    | —             | `experiments/collect.py` queries Prometheus / Loki / Jaeger HTTP APIs                                                                                                                                                                                 |
 
 ### Key design decisions
 
-- **k3d, not minikube/kind.** Multi-node out of the box; k3s containerd socket integrates cleanly with Chaos Mesh.
+- **kind, not minikube/k3d.** Multi-node out of the box via `kind-config.yaml`; containerd socket at `/run/containerd/containerd.sock` integrates cleanly with Chaos Mesh.
 - **Indirect SBI (Model D) via SCP.** All NF-to-NF SBI traffic in Open5GS goes through the SCP. AMF never talks directly to NRF, so the network-partition experiment targets **AMF↔SCP**, not AMF↔NRF.
 - **Synthetic traffic during every run.** Without traffic, a fault produces no observable signal. `run_experiment.sh` runs continuous data-plane pings (UE TUN → 8.8.8.8 via UPF) and a control-plane re-registration loop (4 UEs cycling deregister/register every 15s, exercising NGAP + AMF + AUSF + UDM + NRF + SCP).
 - **4-phase model.** Each experiment: baseline 600s → inject → fault 300s → recovery 300s. Each phase is collected separately so deltas vs baseline are computable.
-- **Pod-level memory metric for memory-pressure.** StressChaos memory runs in chaos-daemon's cgroup, *not* the target container's. We additionally allocate memory **inside** the UPF container (perl trick in `run_experiment.sh`) to actually hit the 128Mi limit and trigger an OOM kill.
+- **Pod-level memory metric for memory-pressure.** StressChaos memory runs in chaos-daemon's cgroup, _not_ the target container's. We additionally allocate memory **inside** the UPF container (perl trick in `run_experiment.sh`) to actually hit the 128Mi limit and trigger an OOM kill.
 - **RTT collection for network-delay/partition.** Chaos Mesh applies delay at the TC kernel layer; Beyla eBPF sits above TC and is blind to it. The script runs `ping AMF→SCP` during the fault phase as the only way to confirm the delay.
 - **Resource limits enforced on every NF.** Without limits, CPU stressors don't throttle and memory stressors don't OOM. Limits are set in `k8s/open5gs-values.yaml` (AMF/UPF 128 Mi & 500m; NRF 64 Mi & 200m; etc).
 - **inotify limits raised.** Chaos Mesh controller and Promtail both consume many inotify watches; the kernel default crashes them.
@@ -63,8 +63,9 @@ pip install --user requests
 curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
 sudo install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl && rm kubectl
 
-# k3d
-curl -s https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh | bash
+# kind
+curl -Lo ./kind https://kind.sigs.k8s.io/dl/latest/kind-linux-amd64
+sudo install -o root -g root -m 0755 kind /usr/local/bin/kind && rm kind
 
 # helm
 curl -L https://get.helm.sh/helm-v3.20.2-linux-amd64.tar.gz | tar xz
@@ -76,19 +77,14 @@ sudo mv linux-amd64/helm /usr/local/bin/helm && rm -rf linux-amd64
 ## 4. Create the cluster
 
 ```bash
-k3d cluster create open5gs \
-  --agents 2 \
-  --k3s-arg "--disable=traefik@server:0" \
-  --k3s-arg "--disable=servicelb@server:0" \
-  --k3s-arg "--kubelet-arg=eviction-hard=nodefs.available<5%,imagefs.available<5%@server:0" \
-  --k3s-arg "--kubelet-arg=eviction-hard=nodefs.available<5%,imagefs.available<5%@agent:*"
+kind create cluster --config k8s/kind-config.yaml
 
-kubectl get nodes   # expect: server-0, agent-0, agent-1 all Ready
+kubectl get nodes   # expect: open5gs-control-plane, open5gs-worker, open5gs-worker2 all Ready
 ```
 
-Flag rationale:
-- `--disable=traefik / servicelb` — no ingress or LB needed; less noise.
-- `eviction-hard=...<5%` — k3d nodes share host disk; default ~10–15% threshold trips DiskPressure on a moderately full disk and blocks pod scheduling.
+Flag rationale (set in `k8s/kind-config.yaml`):
+
+- `evictionHard: nodefs.available: "5%"` — kind nodes share host disk; default ~10–15% threshold trips DiskPressure on a moderately full disk and blocks pod scheduling.
 
 ---
 
@@ -161,8 +157,8 @@ helm install chaos-mesh chaos-mesh/chaos-mesh \
   --namespace chaos-mesh --create-namespace \
   --version 2.7.2 \
   --set chaosDaemon.runtime=containerd \
-  --set chaosDaemon.socketPath=/run/k3s/containerd/containerd.sock
-# k3d uses k3s containerd, NOT the docker socket — this override is mandatory.
+  --set chaosDaemon.socketPath=/run/containerd/containerd.sock
+# kind uses containerd directly at /run/containerd/containerd.sock
 
 # ── Verify ───────────────────────────────────────────────────────────────────
 kubectl get pods -n open5gs
@@ -184,21 +180,24 @@ kubectl port-forward -n monitoring deployment/kube-prom-grafana 3000:3000
 
 ## 6. Daily lifecycle — `./cluster-start.sh`
 
-After every reboot or Docker restart, **do not** use `k3d cluster start` directly. Use:
+After every reboot or Docker restart, run:
 
 ```bash
-./cluster-start.sh                 # normal
-./cluster-start.sh --skip-dns-fix  # if nodes already have working DNS
+./cluster-start.sh              # recreate cluster + redeploy everything (~10–15 min)
+./cluster-start.sh --skip-deploy  # recreate cluster only, deploy manually afterwards
 ```
 
-It does three things:
+It does five things:
 
 1. **Pre-creates `DOCKER-ISOLATION-STAGE-{1,2}` iptables chains.** Docker 29 (nftables backend) sometimes drops these on dirty restart, then all Docker network creation fails.
-2. **Starts the cluster** (`k3d cluster start open5gs`).
-3. **Sets `nameserver 8.8.8.8` in `/etc/resolv.conf` of each k3s node.** The host uses `127.0.0.53` (systemd-resolved stub), which is unreachable from inside the k3d node containers, so containerd can't pull images. This is ephemeral and must be reapplied on every start.
-4. Sanity-checks Chaos Mesh pod health.
+2. **Deletes and recreates the kind cluster** (`kind delete cluster` + `kind create cluster --config k8s/kind-config.yaml`). This is always a clean slate — no stale state from the previous run.
+3. **Checks and raises inotify limits** if below the required thresholds (512 instances / 524288 watches). Promtail and Chaos Mesh controller both crash without these.
+4. **Redeploys the full stack** (Open5GS, UERANSIM, kube-prometheus-stack, Loki, Jaeger, Beyla, Chaos Mesh) unless `--skip-deploy` is passed.
+5. **Sanity-checks** all three namespaces.
 
-**Don't restart Docker while k3d is running** — it corrupts iptables state. `k3d cluster stop open5gs` first if you must.
+> **Note:** kind has no `cluster start/stop` command. The cluster lives as Docker containers; when Docker stops (reboot, `docker restart`), those containers stop. The only safe recovery is to recreate — hence Option A.
+
+**Don't restart Docker while experiments are running** — it will corrupt the cluster state. Stop experiments first.
 
 ---
 
@@ -220,16 +219,16 @@ BASELINE_DURATION=600 FAULT_DURATION=300 RECOVERY_DURATION=300 \
 
 ### What each experiment does
 
-| # | Fault name              | YAML                                   | Class               | Target          | Notes |
-|---|-------------------------|----------------------------------------|---------------------|-----------------|-------|
-| 1 | `cpu-stress-amf`        | `01-cpu-stress-amf.yaml`               | Resource            | AMF             | StressChaos saturates AMF's 500m CPU limit |
-| 2 | `memory-pressure-upf`   | `02-memory-pressure-upf.yaml`          | Resource / Crash    | UPF             | StressChaos + in-container 150 MB allocation → OOM kill |
-| 3 | `pod-crash-amf`         | `03-pod-crash-amf.yaml`                | Crash               | AMF             | Tears down gNB SCTP — script auto-restarts gNB+UEs in recovery |
-| 4 | `pod-crash-smf`         | `07-pod-crash-smf.yaml`                | Crash               | SMF             | Stale PFCP — script auto-restarts SMF in recovery |
-| 5 | `network-delay`         | `04-network-delay-gnb-amf.yaml`        | Network             | AMF→SCP, 500 ms | Invisible to Beyla; RTT confirmed via ping |
-| 6 | `network-partition`     | `05-network-partition-amf-nrf.yaml`    | Network             | AMF↔SCP         | Target is SCP, not NRF (Model D indirect SBI) |
-| 7 | `dependency-failure-nrf`| `06-dependency-failure-nrf.yaml`       | Dependency          | NRF (kill)      | Recovery waits 30 s for NF re-registration |
-| 8 | `network-delay-nrf`     | `08-network-delay-nrf.yaml`            | Slow dependency     | NRF, 500 ms     | Gradual SBI latency vs hard kill |
+| #   | Fault name               | YAML                                | Class            | Target          | Notes                                                          |
+| --- | ------------------------ | ----------------------------------- | ---------------- | --------------- | -------------------------------------------------------------- |
+| 1   | `cpu-stress-amf`         | `01-cpu-stress-amf.yaml`            | Resource         | AMF             | StressChaos saturates AMF's 500m CPU limit                     |
+| 2   | `memory-pressure-upf`    | `02-memory-pressure-upf.yaml`       | Resource / Crash | UPF             | StressChaos + in-container 150 MB allocation → OOM kill        |
+| 3   | `pod-crash-amf`          | `03-pod-crash-amf.yaml`             | Crash            | AMF             | Tears down gNB SCTP — script auto-restarts gNB+UEs in recovery |
+| 4   | `pod-crash-smf`          | `07-pod-crash-smf.yaml`             | Crash            | SMF             | Stale PFCP — script auto-restarts SMF in recovery              |
+| 5   | `network-delay`          | `04-network-delay-gnb-amf.yaml`     | Network          | AMF→SCP, 500 ms | Invisible to Beyla; RTT confirmed via ping                     |
+| 6   | `network-partition`      | `05-network-partition-amf-nrf.yaml` | Network          | AMF↔SCP         | Target is SCP, not NRF (Model D indirect SBI)                  |
+| 7   | `dependency-failure-nrf` | `06-dependency-failure-nrf.yaml`    | Dependency       | NRF (kill)      | Recovery waits 30 s for NF re-registration                     |
+| 8   | `network-delay-nrf`      | `08-network-delay-nrf.yaml`         | Slow dependency  | NRF, 500 ms     | Gradual SBI latency vs hard kill                               |
 
 ### What happens during a run
 
@@ -309,8 +308,9 @@ kubectl patch <kind>/<name> -n open5gs --type=json \
 ```
 reproduce/
 ├── README.md                    ← this file
-├── cluster-start.sh             ← daily lifecycle (DNS + iptables fix)
+├── cluster-start.sh             ← daily lifecycle (recreate cluster + redeploy)
 ├── k8s/
+│   ├── kind-config.yaml         ← kind cluster config: 3 nodes, eviction thresholds
 │   ├── open5gs-values.yaml      ← Helm values: NF resource limits, MCC/MNC, slice id
 │   ├── monitoring/
 │   │   └── beyla-daemonset.yaml ← eBPF tracer DaemonSet (privileged, hostPID)

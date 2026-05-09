@@ -1,16 +1,21 @@
 #!/usr/bin/env bash
-# Bring up the open5gs k3d cluster and fix DNS inside k3s nodes.
-# Run this after every reboot or Docker restart.
+# Recreate the open5gs kind cluster and redeploy the full stack.
+# Run this after every reboot or Docker restart (Option A: always recreate).
 #
-# Usage: ./cluster-start.sh [--skip-dns-fix]
+# Usage: ./cluster-start.sh [--skip-deploy]
+#   --skip-deploy   Recreate the cluster only; skip Helm installs (useful if
+#                   you want to deploy manually or iterate on values).
 set -euo pipefail
 
 CLUSTER=open5gs
-NODES=(k3d-open5gs-server-0 k3d-open5gs-agent-0 k3d-open5gs-agent-1)
-DNS=8.8.8.8
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+KIND_CONFIG="$SCRIPT_DIR/k8s/kind-config.yaml"
 
-# --- 1. Fix Docker iptables chains if missing (corrupted after Docker restart) ---
-echo "[1/4] Checking Docker iptables chains..."
+SKIP_DEPLOY=false
+[[ "${1:-}" == "--skip-deploy" ]] && SKIP_DEPLOY=true
+
+# --- 1. Fix Docker iptables chains if missing (Docker 29 nftables bug) --------
+echo "[1/5] Checking Docker iptables chains..."
 if ! sudo iptables -t filter -L DOCKER-ISOLATION-STAGE-2 &>/dev/null; then
   echo "  -> Chains missing, pre-creating..."
   sudo iptables -t filter -N DOCKER-ISOLATION-STAGE-1 2>/dev/null || true
@@ -20,34 +25,109 @@ else
   echo "  -> OK"
 fi
 
-# --- 2. Start cluster ---
-echo "[2/4] Starting cluster '$CLUSTER'..."
-k3d cluster start "$CLUSTER"
+# --- 2. Tear down any existing cluster and recreate ---------------------------
+echo "[2/5] Recreating kind cluster '$CLUSTER'..."
+kind delete cluster --name "$CLUSTER" 2>/dev/null || true
+kind create cluster --config "$KIND_CONFIG"
+echo "  -> Cluster created"
+kubectl get nodes
 
-# --- 3. Fix DNS in k3s nodes (ephemeral — wiped on each stop/start) ---
-if [[ "${1:-}" != "--skip-dns-fix" ]]; then
-  echo "[3/4] Fixing DNS in k3s nodes (nameserver $DNS)..."
-  for node in "${NODES[@]}"; do
-    docker exec "$node" sh -c "echo 'nameserver $DNS' > /etc/resolv.conf"
-    echo "  -> $node OK"
-  done
-fi
-
-# --- 4. Check Chaos Mesh health (informational — it persists in the cluster) ---
-echo "[4/4] Checking Chaos Mesh status..."
-CHAOS_NOTREADY=$(kubectl get pods -n chaos-mesh --no-headers 2>/dev/null \
-  | grep -v "Running\|Completed" | wc -l)
-if [[ "$CHAOS_NOTREADY" -eq 0 ]]; then
-  echo "  -> OK (all chaos-mesh pods Running)"
+# --- 3. Raise inotify limits (required for Promtail + Chaos Mesh controller) --
+echo "[3/5] Checking inotify limits..."
+INSTANCES=$(sysctl -n fs.inotify.max_user_instances)
+WATCHES=$(sysctl -n fs.inotify.max_user_watches)
+if [[ "$INSTANCES" -lt 512 || "$WATCHES" -lt 524288 ]]; then
+  echo "  -> Raising limits (current: instances=$INSTANCES watches=$WATCHES)..."
+  sudo sysctl fs.inotify.max_user_instances=512
+  sudo sysctl fs.inotify.max_user_watches=524288
 else
-  echo "  -> WARNING: some chaos-mesh pods are not Ready:"
-  kubectl get pods -n chaos-mesh --no-headers | grep -v "Running\|Completed" || true
-  echo "  -> If controller-manager is crashing, check inotify limits:"
-  echo "       sudo sysctl fs.inotify.max_user_instances=512"
-  echo "       sudo sysctl fs.inotify.max_user_watches=524288"
-  echo "     Then: kubectl rollout restart deployment -n chaos-mesh"
+  echo "  -> OK (instances=$INSTANCES watches=$WATCHES)"
 fi
+
+# --- 4. Deploy full stack (unless --skip-deploy) ------------------------------
+if $SKIP_DEPLOY; then
+  echo "[4/5] Skipping deploy (--skip-deploy)"
+else
+  echo "[4/5] Deploying full stack..."
+
+  # ── Open5GS ────────────────────────────────────────────────────────────────
+  echo "  [4a] Open5GS..."
+  kubectl create namespace open5gs --dry-run=client -o yaml | kubectl apply -f -
+  helm install open5gs oci://registry-1.docker.io/gradiantcharts/open5gs \
+    --version 2.3.4 \
+    --namespace open5gs \
+    -f "$SCRIPT_DIR/k8s/open5gs-values.yaml" \
+    --wait --timeout=10m
+  kubectl delete deployment -n open5gs open5gs-webui --ignore-not-found
+
+  # ── UERANSIM ───────────────────────────────────────────────────────────────
+  echo "  [4b] UERANSIM gNB + UEs..."
+  helm install ueransim-gnb oci://registry-1.docker.io/gradiant/ueransim-gnb \
+    --version 0.2.6 --namespace open5gs \
+    --values https://gradiant.github.io/5g-charts/docs/open5gs-ueransim-gnb/gnb-ues-values.yaml \
+    --wait --timeout=5m
+  helm install ueransim-ues oci://registry-1.docker.io/gradiant/ueransim-ues \
+    --version 0.1.2 --namespace open5gs \
+    --values https://gradiant.github.io/5g-charts/docs/open5gs-ueransim-gnb/gnb-ues-values.yaml \
+    --wait --timeout=5m
+
+  # ── Observability ──────────────────────────────────────────────────────────
+  echo "  [4c] Observability stack..."
+  helm repo add prometheus-community https://prometheus-community.github.io/helm-charts 2>/dev/null || true
+  helm repo add grafana               https://grafana.github.io/helm-charts             2>/dev/null || true
+  helm repo add jaegertracing         https://jaegertracing.github.io/helm-charts       2>/dev/null || true
+  helm repo update
+
+  kubectl create namespace monitoring --dry-run=client -o yaml | kubectl apply -f -
+
+  helm install kube-prom prometheus-community/kube-prometheus-stack \
+    --namespace monitoring \
+    --set grafana.adminPassword=admin \
+    --set prometheus.prometheusSpec.scrapeInterval=5s \
+    --timeout=10m
+
+  helm install loki grafana/loki-stack \
+    --namespace monitoring \
+    --set promtail.enabled=true \
+    --set loki.persistence.enabled=false \
+    --set grafana.enabled=false
+
+  helm install jaeger jaegertracing/jaeger \
+    --namespace monitoring \
+    --set allInOne.enabled=true \
+    --set storage.type=memory \
+    --set agent.enabled=false --set collector.enabled=false --set query.enabled=false \
+    --timeout=5m
+
+  kubectl apply -f "$SCRIPT_DIR/k8s/monitoring/beyla-daemonset.yaml"
+
+  # ── Chaos Mesh ─────────────────────────────────────────────────────────────
+  echo "  [4d] Chaos Mesh..."
+  helm repo add chaos-mesh https://charts.chaos-mesh.org 2>/dev/null || true
+  helm repo update
+  helm install chaos-mesh chaos-mesh/chaos-mesh \
+    --namespace chaos-mesh --create-namespace \
+    --version 2.7.2 \
+    --set chaosDaemon.runtime=containerd \
+    --set chaosDaemon.socketPath=/run/containerd/containerd.sock
+
+  echo "  -> Waiting for Chaos Mesh to be ready..."
+  kubectl rollout status deployment/chaos-controller-manager -n chaos-mesh --timeout=3m
+fi
+
+# --- 5. Sanity checks ---------------------------------------------------------
+echo "[5/5] Sanity checks..."
+echo "  Nodes:"
+kubectl get nodes
+echo "  open5gs pods:"
+kubectl get pods -n open5gs
+echo "  monitoring pods:"
+kubectl get pods -n monitoring
+echo "  chaos-mesh pods:"
+kubectl get pods -n chaos-mesh
 
 echo ""
-echo "Cluster ready. Verifying nodes..."
-kubectl get nodes
+echo "Cluster ready."
+echo "  Port-forward Grafana:    kubectl port-forward -n monitoring deployment/kube-prom-grafana 3000:3000"
+echo "  Port-forward Prometheus: kubectl port-forward -n monitoring svc/kube-prom-kube-prometheus-prometheus 9090:9090"
+echo "  Port-forward Jaeger:     kubectl port-forward -n monitoring svc/jaeger 16686:16686"
