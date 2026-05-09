@@ -9,7 +9,7 @@ set -euo pipefail
 
 CLUSTER=open5gs
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-KIND_CONFIG="$SCRIPT_DIR/k8s/kind-config.yaml"
+KIND_CONFIG="$SCRIPT_DIR/kind/kind-config.yaml"
 
 SKIP_DEPLOY=false
 [[ "${1:-}" == "--skip-deploy" ]] && SKIP_DEPLOY=true
