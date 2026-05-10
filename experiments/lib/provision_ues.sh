@@ -79,8 +79,13 @@ print(f'print("Provisioned $COUNT subscribers.");')
 PYEOF
 )
 
+# Write script to a temp file inside the pod to avoid ARG_MAX limits
+TMPFILE=$(kubectl exec -n "$NAMESPACE" "$MONGO_POD" -- mktemp /tmp/provision_XXXXXX.js 2>/dev/null)
+echo "$MONGO_SCRIPT" | kubectl exec -i -n "$NAMESPACE" "$MONGO_POD" -- \
+    sh -c "cat > $TMPFILE"
 kubectl exec -n "$NAMESPACE" "$MONGO_POD" -- \
-    mongosh --quiet --eval "$MONGO_SCRIPT" open5gs
+    mongosh --quiet "mongodb://localhost/open5gs" "$TMPFILE"
+kubectl exec -n "$NAMESPACE" "$MONGO_POD" -- rm -f "$TMPFILE" 2>/dev/null || true
 
 echo "[provision] Done. $COUNT subscribers available."
 echo "[provision] Verify with:"
