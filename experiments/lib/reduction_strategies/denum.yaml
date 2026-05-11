@@ -1,0 +1,6 @@
+config:
+  pipelineStages:
+    - docker: {}
+    - replace:
+        expression: "([0-9]{5,})"
+        replacement: "<ID>"

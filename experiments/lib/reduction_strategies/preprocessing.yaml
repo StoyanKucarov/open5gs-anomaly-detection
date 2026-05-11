@@ -1,0 +1,8 @@
+# Strip out noisy Kubernetes metadata headers
+config:
+  pipelineStages:
+    - docker: {}
+    - regex:
+        expression: "^(?P<time>\\S+) (?P<stream>stdout|stderr) (?P<flags>\\S+) (?P<content>.*)$"
+    - output:
+        source: content

@@ -1,0 +1,7 @@
+# Only keep WARN and ERROR if 'dynamic_mode' is on
+config:
+  pipelineStages:
+    - docker: {}
+    - drop:
+        source: "level"
+        expression: "(debug|info|trace)"

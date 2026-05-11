@@ -1,0 +1,5 @@
+config:
+  pipelineStages:
+    - docker: {}
+    - drop:
+        expression: ".*HEARTBEAT.*|.*Keep-Alive.*"
