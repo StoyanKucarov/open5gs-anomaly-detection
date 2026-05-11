@@ -1,5 +1,5 @@
 # Only keep WARN and ERROR if 'dynamic_mode' is on
-config:
+promtail:
   pipelineStages:
     - docker: {}
     - drop:

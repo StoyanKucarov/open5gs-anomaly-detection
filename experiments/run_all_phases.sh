@@ -43,10 +43,14 @@ run_phase() {
 }
 
 run_phase 0 "Baseline"              "$SCRIPT_DIR/00-baseline/run.sh"
-run_phase 1 "Prometheus Overhead"   "$SCRIPT_DIR/01-overhead-prometheus/run.sh"
-run_phase 2 "Beyla/eBPF Overhead"   "$SCRIPT_DIR/02-overhead-ebpf/run.sh"
-run_phase 3 "Fault Detection"       "$SCRIPT_DIR/03-fault-detection/run_all.sh"
-run_phase 4 "Scalability"           "$SCRIPT_DIR/04-scalability/run.sh"
+# run_phase 1 "Prometheus Overhead"   "$SCRIPT_DIR/01-overhead-prometheus/run.sh"
+# run_phase 2 "Beyla/eBPF Overhead"   "$SCRIPT_DIR/02-overhead-ebpf/run.sh"
+# run_phase 3 "Fault Detection"       "$SCRIPT_DIR/03-fault-detection/run_all.sh"
+# run_phase 4 "Scalability"           "$SCRIPT_DIR/04-scalability/run.sh"
+run_phase 1 "CPU overhead"          "$SCRIPT_DIR/01-cpu-overhead/run.sh"
+run_phase 2 "Storage requirements"  "$SCRIPT_DIR/02-storage-requirements/run.sh"
+run_phase 3 "System visibility"     "$SCRIPT_DIR/03-system-visibility/run.sh"
+run_phase 4 "Scalability (strategies)" "$SCRIPT_DIR/04-scalability/run-str.sh"
 
 echo ""
 echo "████████████████████████████████████████████████████████████"
@@ -54,18 +58,18 @@ echo " ALL PHASES COMPLETE"
 echo " Data in: $REPO_ROOT/data/experiments/"
 echo "████████████████████████████████████████████████████████████"
 
-echo ""
-echo "████████████████████████████████████████████████████████████"
-echo " RUNNING ANALYSIS"
-echo "████████████████████████████████████████████████████████████"
-python3 "$REPO_ROOT/data/analysis/analyse.py" \
-    --data-dir "$REPO_ROOT/data/experiments" \
-    --out "$REPO_ROOT/data/analysis"
+# echo ""
+# echo "████████████████████████████████████████████████████████████"
+# echo " RUNNING ANALYSIS"
+# echo "████████████████████████████████████████████████████████████"
+# python3 "$REPO_ROOT/data/analysis/analyse.py" \
+#     --data-dir "$REPO_ROOT/data/experiments" \
+#     --out "$REPO_ROOT/data/analysis"
 
-echo ""
-echo "████████████████████████████████████████████████████████████"
-echo " ALL_DONE"
-echo " Figures : $REPO_ROOT/data/analysis/figures"
-echo " Tables  : $REPO_ROOT/data/analysis/tables"
-echo " Summary : $REPO_ROOT/data/analysis/summary"
-echo "████████████████████████████████████████████████████████████"
+# echo ""
+# echo "████████████████████████████████████████████████████████████"
+# echo " ALL_DONE"
+# echo " Figures : $REPO_ROOT/data/analysis/figures"
+# echo " Tables  : $REPO_ROOT/data/analysis/tables"
+# echo " Summary : $REPO_ROOT/data/analysis/summary"
+# echo "████████████████████████████████████████████████████████████"

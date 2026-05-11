@@ -37,8 +37,14 @@ log_experiment_start "$NAME" "$OUT_DIR"
 # Internal Helper for Log/CPU Snapshots
 capture_visibility_snapshot() {
     local phase="$1"
+    
     kubectl top pods -n monitoring --no-headers | grep "promtail" >> "$OUT_DIR/promtail_cpu_$phase.csv" || true
-    kubectl logs -n open5gs -l app=amf --tail=100 > "$OUT_DIR/logs/amf_sample_$phase.log" || true
+
+    local LOG_FILE="$OUT_DIR/logs/amf_sample_$phase.log"
+    
+    kubectl logs -n open5gs -l "app.kubernetes.io/name=amf" --tail=200 --all-containers=true > "$LOG_FILE" 2>/dev/null || \
+    kubectl logs -n open5gs -l "app=amf" --tail=200 --all-containers=true > "$LOG_FILE" 2>/dev/null || \
+    echo "WARNING: Could not find AMF logs for phase $phase" > "$LOG_FILE"
 }
 
 START_SIZE=$(kubectl exec -n monitoring svc/loki -- du -s /data/loki | awk '{print $1}')

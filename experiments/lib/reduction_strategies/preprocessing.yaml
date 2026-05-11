@@ -1,5 +1,5 @@
 # Strip out noisy Kubernetes metadata headers
-config:
+promtail:
   pipelineStages:
     - docker: {}
     - regex:

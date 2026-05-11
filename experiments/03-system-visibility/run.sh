@@ -19,11 +19,11 @@ MANIFESTS=(
     "01-cpu-stress-amf.yaml"
     "02-memory-pressure-upf.yaml"
     "03-pod-crash-amf.yaml"
+    "04-network-delay-gnb-amf.yaml"
     "05-network-partition-amf-nrf.yaml"
     "06-dependency-failure-nrf.yaml"
+    "07-pod-crash-smf.yaml"
     "08-network-delay-nrf.yaml"
-    "07-packet-loss-upf.yaml"
-    "08-cpu-stress-scp.yaml"
 )
 
 echo "============================================================"

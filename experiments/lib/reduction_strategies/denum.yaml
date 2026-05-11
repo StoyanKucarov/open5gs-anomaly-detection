@@ -1,4 +1,4 @@
-config:
+promtail:
   pipelineStages:
     - docker: {}
     - replace:
