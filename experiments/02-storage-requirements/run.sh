@@ -28,11 +28,6 @@ echo "============================================================"
 
 check_cluster_ready
 
-echo "[setup] Provisioning $UE_COUNT subscribers..."
-bash "$LIB_DIR/provision_ues.sh" "$UE_COUNT"
-scale_ues "$UE_COUNT"
-wait_for_pods_stable open5gs 120
-
 echo "[setup] Scaling down observability stack..."
 kubectl scale statefulset -n monitoring \
     prometheus-kube-prom-kube-prometheus-prometheus --replicas=0 2>/dev/null || true
@@ -46,6 +41,7 @@ for STRATEGY in "${STRATEGIES[@]}"; do
     OUT_DIR="$OUT_BASE/$STRATEGY"
     mkdir -p "$OUT_DIR"
 
+    reset_experiment_state "$STRATEGY" "$UE_COUNT"
     echo ""
     echo "--- Strategy: $STRATEGY ---"
     log_experiment_start "log-storage-$STRATEGY" "$OUT_DIR"
@@ -53,7 +49,7 @@ for STRATEGY in "${STRATEGIES[@]}"; do
     apply_log_strategy "$STRATEGY"
 
     echo "[wait] Flushing Loki and stabilizing (60s)..."
-    kubectl exec -n monitoring svc/loki -- wget -qO- --post-data='' http://localhost:3100/loki/api/v1/push >/dev/null 2>&1 || true
+    kubectl exec -n monitoring svc/loki -- curl -X POST http://localhost:3100/flush>/dev/null 2>&1 || true
     sleep 60
 
     START_SIZE=$(kubectl exec -n monitoring svc/loki -- du -s /data/loki | awk '{print $1}')
@@ -64,7 +60,7 @@ for STRATEGY in "${STRATEGIES[@]}"; do
     
     # Flush again so the logs generated during the window are written to disk
     echo -e "\n[collect] Finalizing storage capture..."
-    kubectl exec -n monitoring svc/loki -- wget -qO- --post-data='' http://localhost:3100/loki/api/v1/push >/dev/null 2>&1 || true
+    kubectl exec -n monitoring svc/loki -- curl -X POST http://localhost:3100/flush >/dev/null 2>&1 || true
     
     END_SIZE=$(kubectl exec -n monitoring svc/loki -- du -s /data/loki | awk '{print $1}')
     END_TS=$(now_ts)

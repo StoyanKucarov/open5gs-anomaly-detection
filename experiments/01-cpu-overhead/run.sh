@@ -28,11 +28,6 @@ echo "============================================================"
 
 check_cluster_ready
 
-echo "[setup] Provisioning $UE_COUNT subscribers..."
-bash "$LIB_DIR/provision_ues.sh" "$UE_COUNT"
-scale_ues "$UE_COUNT"
-wait_for_pods_stable open5gs 300
-
 echo "[setup] Scaling down observability stack..."
 kubectl scale statefulset -n monitoring \
     prometheus-kube-prom-kube-prometheus-prometheus --replicas=0 2>/dev/null || true
@@ -45,6 +40,8 @@ echo "[setup] Observability scaled down"
 for STRATEGY in "${STRATEGIES[@]}"; do
     OUT_DIR="$OUT_BASE/$STRATEGY"
     mkdir -p "$OUT_DIR"
+
+    reset_experiment_state "$STRATEGY" "$UE_COUNT"
 
     echo ""
     echo "--- Strategy: $STRATEGY ---"
@@ -70,6 +67,7 @@ for STRATEGY in "${STRATEGIES[@]}"; do
         echo -n "."
         sleep "$SAMPLE_INTERVAL"
     done
+
     echo ""
     END_TS=$(now_ts)
 

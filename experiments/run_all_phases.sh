@@ -42,7 +42,7 @@ run_phase() {
     sleep 120
 }
 
-run_phase 0 "Baseline"              "$SCRIPT_DIR/00-baseline/run.sh"
+#run_phase 0 "Baseline"              "$SCRIPT_DIR/00-baseline/run.sh"
 # run_phase 1 "Prometheus Overhead"   "$SCRIPT_DIR/01-overhead-prometheus/run.sh"
 # run_phase 2 "Beyla/eBPF Overhead"   "$SCRIPT_DIR/02-overhead-ebpf/run.sh"
 # run_phase 3 "Fault Detection"       "$SCRIPT_DIR/03-fault-detection/run_all.sh"

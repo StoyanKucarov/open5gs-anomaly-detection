@@ -1,5 +1,13 @@
 promtail:
-  pipelineStages:
-    - docker: {}
-    - drop:
-        expression: ".*HEARTBEAT.*|.*Keep-Alive.*"
+  config:
+    snippets:
+      pipelineStages:
+        - docker: {}
+        - regex:
+            expression: "^(?P<nf_proc>[A-Z_]+) ?: ?(?P<var_data>.*)$"
+        - labels:
+            template_id: nf_proc
+        - replace:
+            source: "var_data"
+            expression: ".*"
+            replace: "<DATA_REDACTED>"   

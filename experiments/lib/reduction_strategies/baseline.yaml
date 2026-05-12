@@ -1,3 +1,5 @@
 promtail:
-  pipelineStages:
-    - docker: {}
+  config:
+    snippets:
+      pipelineStages:
+        - docker: {}

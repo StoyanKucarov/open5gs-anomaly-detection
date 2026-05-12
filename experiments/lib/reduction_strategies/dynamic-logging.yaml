@@ -1,7 +1,10 @@
-# Only keep WARN and ERROR if 'dynamic_mode' is on
 promtail:
-  pipelineStages:
-    - docker: {}
-    - drop:
-        source: "level"
-        expression: "(debug|info|trace)"
+  config:
+    snippets:
+      pipelineStages:
+        - docker: {}
+        - regex:
+            expression: 'level=(?P<lvl>[A-Z]+)'
+        - drop:
+            source: "lvl"
+            expression: '(DEBUG|INFO|TRACE|NOTICE)'

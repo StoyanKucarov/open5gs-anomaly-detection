@@ -1,6 +1,8 @@
 promtail:
-  pipelineStages:
-    - docker: {}
-    - replace:
-        expression: "([0-9]{5,})"
-        replacement: "<ID>"
+  config:
+    snippets:
+      pipelineStages:
+        - docker: {}
+        - replace:
+            expression: '(\b\d{15}\b|\b0x[a-fA-F0-9]{8,10}\b)'
+            replace: "[ID_MASK]"
