@@ -65,6 +65,15 @@ run_fault_experiment 5 "05-dependency-failure-nrf"    "06-dependency-failure-nrf
 run_fault_experiment 6 "06-network-delay-nrf"         "08-network-delay-nrf.yaml"
 run_fault_experiment 7 "07-packet-loss-upf"           "07-packet-loss-upf.yaml"
 run_fault_experiment 8 "08-cpu-stress-scp"            "08-cpu-stress-scp.yaml"
+run_fault_experiment 9 "03-pfcp-session-establishment-flood-upf"        "03-pfcp-session-establishment-flood-upf.yaml"
+run_fault_experiment 10 "04-pfcp-session-deletion-upf"                  "04-pfcp-session-deletion-upf.yaml"
+run_fault_experiment 11 "05-pfcp-session-modification-drop-upf"         "05-pfcp-session-modification-drop-upf.yaml"
+run_fault_experiment 12 "07-pfcp-session-modification-dupl-upf"         "07-pfcp-session-modification-dupl-upf.yaml"
+run_fault_experiment 13 "09-amf-internal-fault-pod-kill"                "09-amf-internal-fault-pod-kill.yaml"
+run_fault_experiment 14 "10-smf-internal-fault-pod-kill"                "10-smf-internal-fault-pod-kill.yaml"
+run_fault_experiment 15 "11-upf-infrastructure-packet-loss"             "11-upf-infrastructure-packet-loss.yaml"
+
+
 
 echo ""
 echo "============================================================"
