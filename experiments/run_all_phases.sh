@@ -5,14 +5,14 @@
 # then runs the analysis script automatically.
 #
 # Usage:
-#   bash run_all_phases.sh [--from-phase <0|1|2|3|4>]
+#   bash run_all_phases.sh [--from-phase <0|1|2|3|4|5>]
 #
 # Phases:
-#   0 — Baseline (no telemetry)
-#   1 — Prometheus overhead (3 scrape intervals)
-#   2 — Beyla/eBPF overhead (3 sampling rates)
-#   3 — Fault detection (8 faults)
-#   4 — Scalability (6 scenarios)
+#   1 — CPU overhead (log strategies)
+#   2 — Storage requirements (log strategies)
+#   3 — System visibility / fault detection
+#   4 — Scalability: NF & Beyla overhead (Prometheus + Jaeger)
+#   5 — Scalability: log strategies (Loki storage + Promtail CPU)
 #
 # Estimated total runtime: ~6-7 hours
 # Run in a tmux/screen session.
@@ -42,15 +42,16 @@ run_phase() {
     sleep 120
 }
 
-#run_phase 0 "Baseline"              "$SCRIPT_DIR/00-baseline/run.sh"
-# run_phase 1 "Prometheus Overhead"   "$SCRIPT_DIR/01-overhead-prometheus/run.sh"
-# run_phase 2 "Beyla/eBPF Overhead"   "$SCRIPT_DIR/02-overhead-ebpf/run.sh"
-# run_phase 3 "Fault Detection"       "$SCRIPT_DIR/03-fault-detection/run_all.sh"
-# run_phase 4 "Scalability"           "$SCRIPT_DIR/04-scalability/run.sh"
-run_phase 1 "CPU overhead"          "$SCRIPT_DIR/01-cpu-overhead/run.sh"
-run_phase 2 "Storage requirements"  "$SCRIPT_DIR/02-storage-requirements/run.sh"
-run_phase 3 "System visibility"     "$SCRIPT_DIR/03-system-visibility/run.sh"
-run_phase 4 "Scalability (strategies)" "$SCRIPT_DIR/04-scalability/run-str.sh"
+run_phase 0 "Baseline"              "$SCRIPT_DIR/00-baseline/run.sh"
+run_phase 1 "Prometheus Overhead"   "$SCRIPT_DIR/01-overhead-prometheus/run.sh"
+run_phase 2 "Beyla/eBPF Overhead"   "$SCRIPT_DIR/02-overhead-ebpf/run.sh"
+run_phase 3 "Fault Detection"       "$SCRIPT_DIR/03-fault-detection/run_all.sh"
+run_phase 4 "Scalability"           "$SCRIPT_DIR/04-scalability/run.sh"
+run_phase 1 "CPU overhead"          "$SCRIPT_DIR/05-cpu-overhead/run.sh"
+run_phase 2 "Storage requirements"  "$SCRIPT_DIR/06-storage-requirements/run.sh"
+run_phase 3 "System visibility"     "$SCRIPT_DIR/07-system-visibility/run.sh"
+run_phase 4 "Scalability (NF/Beyla overhead)" "$SCRIPT_DIR/04-scalability/run.sh"
+run_phase 5 "Scalability (log strategies)"  "$SCRIPT_DIR/04-scalability/run-str.sh"
 
 echo ""
 echo "████████████████████████████████████████████████████████████"

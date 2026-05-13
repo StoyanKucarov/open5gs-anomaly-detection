@@ -27,7 +27,8 @@ LOKI_URL="${LOKI_URL:-http://127.0.0.1:3100}"
 # Cleanup on exit
 # ---------------------------------------------------------------------------
 _cleanup() {
-    for pid in "${_PF_PIDS[@]:-}"; do
+    [[ ${#_PF_PIDS[@]} -eq 0 ]] && return
+    for pid in "${_PF_PIDS[@]}"; do
         kill "$pid" 2>/dev/null || true
     done
 }
