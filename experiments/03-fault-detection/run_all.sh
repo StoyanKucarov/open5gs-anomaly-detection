@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 03-fault-detection/run_all.sh
 #
-# Phase 3: Fault detection — runs all 10 faults in sequence.
+# Phase 3: Fault detection — runs all 17 faults in sequence.
 #
 # Each fault: PRE phase -> fault phase -> POST phase, with full
 # Prometheus + Jaeger + Loki + K8s events + NRF API + RTT collection.
@@ -80,16 +80,23 @@ run_fault_experiment() {
 }
 
 # Slug == chaos YAML basename, so lib/hooks/<slug>.sh resolves automatically.
-run_fault_experiment 1  "01-cpu-stress-amf"            "01-cpu-stress-amf.yaml"
-run_fault_experiment 2  "02-memory-pressure-upf"       "02-memory-pressure-upf.yaml"
-run_fault_experiment 3  "03-pod-crash-amf"             "03-pod-crash-amf.yaml"
-run_fault_experiment 4  "04-network-delay-gnb-amf"     "04-network-delay-gnb-amf.yaml"
-run_fault_experiment 5  "05-network-partition-amf-nrf" "05-network-partition-amf-nrf.yaml"
-run_fault_experiment 6  "06-dependency-failure-nrf"    "06-dependency-failure-nrf.yaml"
-run_fault_experiment 7  "07-packet-loss-upf"           "07-packet-loss-upf.yaml"
-run_fault_experiment 8  "07-pod-crash-smf"             "07-pod-crash-smf.yaml"
-run_fault_experiment 9  "08-cpu-stress-scp"            "08-cpu-stress-scp.yaml"
-run_fault_experiment 10 "08-network-delay-nrf"         "08-network-delay-nrf.yaml"
+run_fault_experiment 1  "01-cpu-stress-amf"                        "01-cpu-stress-amf.yaml"
+run_fault_experiment 2  "02-memory-pressure-upf"                   "02-memory-pressure-upf.yaml"
+run_fault_experiment 3  "03-pod-crash-amf"                         "03-pod-crash-amf.yaml"
+run_fault_experiment 4  "04-network-delay-gnb-amf"                 "04-network-delay-gnb-amf.yaml"
+run_fault_experiment 5  "05-network-partition-amf-nrf"             "05-network-partition-amf-nrf.yaml"
+run_fault_experiment 6  "06-dependency-failure-nrf"                "06-dependency-failure-nrf.yaml"
+run_fault_experiment 7  "07-packet-loss-upf"                       "07-packet-loss-upf.yaml"
+run_fault_experiment 8  "08-pod-crash-smf"                         "08-pod-crash-smf.yaml"
+run_fault_experiment 9  "09-cpu-stress-scp"                        "09-cpu-stress-scp.yaml"
+run_fault_experiment 10 "10-network-delay-nrf"                     "10-network-delay-nrf.yaml"
+run_fault_experiment 11 "11-pfcp-session-establishment-flood-upf"  "11-pfcp-session-establishment-flood-upf.yaml"
+run_fault_experiment 12 "12-pfcp-session-deletion-upf"             "12-pfcp-session-deletion-upf.yaml"
+run_fault_experiment 13 "13-pfcp-session-modification-drop-upf"    "13-pfcp-session-modification-drop-upf.yaml"
+run_fault_experiment 14 "14-pfcp-session-modification-dupl-upf"    "14-pfcp-session-modification-dupl-upf.yaml"
+run_fault_experiment 15 "15-amf-internal-fault-pod-kill"           "15-amf-internal-fault-pod-kill.yaml"
+run_fault_experiment 16 "16-smf-internal-fault-pod-kill"           "16-smf-internal-fault-pod-kill.yaml"
+run_fault_experiment 17 "17-upf-infrastructure-packet-loss"        "17-upf-infrastructure-packet-loss.yaml"
 
 echo ""
 echo "============================================================"
