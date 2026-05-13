@@ -179,12 +179,13 @@ sleep_with_progress() {
 
 check_cluster_ready() {
     echo "[check] Verifying cluster context..."
-    kubectl cluster-info --context kind-open5gs >/dev/null 2>&1 || {
-        echo "[ERROR] Cluster kind-open5gs not reachable" >&2
+    local ctx
+    ctx=$(kubectl config current-context 2>/dev/null || true)
+    kubectl cluster-info --context "$ctx" >/dev/null 2>&1 || {
+        echo "[ERROR] Cluster $ctx not reachable" >&2
         exit 1
     }
-    kubectl config use-context kind-open5gs >/dev/null 2>&1
-    echo "[check] Cluster ready"
+    echo "[check] Cluster ready (context: $ctx)"
 }
 
 # ---------------------------------------------------------------------------
@@ -199,7 +200,8 @@ wait_for_pods_stable() {
     while true; do
         local not_ready
         not_ready=$(kubectl get pods -n "$ns" --no-headers 2>/dev/null \
-            | { grep -v -E "Running|Completed|Succeeded" || true; } | wc -l)
+            | { grep -v -E "Running|Completed|Succeeded" || true; } \
+            | { grep -v "open5gs-populate" || true; } | wc -l)
         if [[ "$not_ready" -eq 0 ]]; then
             echo " stable"
             return 0
