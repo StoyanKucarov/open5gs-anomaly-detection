@@ -16,6 +16,7 @@ spec:
       - open5gs
     labelSelectors:
       app.kubernetes.io/name: ausf
+      app.kubernetes.io/instance: open5gs
   stressors:
     cpu:
       workers: 4
