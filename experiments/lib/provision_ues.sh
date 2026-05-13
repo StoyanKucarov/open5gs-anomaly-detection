@@ -56,6 +56,7 @@ db.getSiblingDB("open5gs").subscribers.updateOne(
     ambr: {{ downlink: {{ value: 1, unit: 3 }}, uplink: {{ value: 1, unit: 3 }} }},
     slice: [{{
       sst: 1,
+      sd: "111111",
       default_indicator: true,
       session: [{{
         name: "internet",

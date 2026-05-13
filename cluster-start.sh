@@ -56,7 +56,7 @@ else
   helm install open5gs oci://registry-1.docker.io/gradiantcharts/open5gs \
     --version 2.3.4 \
     --namespace open5gs \
-    -f "$SCRIPT_DIR/k8s/open5gs-values.yaml" \
+    -f "$SCRIPT_DIR/kind/open5gs-values.yaml" \
     --wait --timeout=10m
   kubectl delete deployment -n open5gs open5gs-webui --ignore-not-found
 
@@ -99,7 +99,7 @@ else
     --set agent.enabled=false --set collector.enabled=false --set query.enabled=false \
     --timeout=5m
 
-  kubectl apply -f "$SCRIPT_DIR/k8s/monitoring/beyla-daemonset.yaml"
+  kubectl apply -f "$SCRIPT_DIR/kind/monitoring/beyla-daemonset.yaml"
 
   # ── Chaos Mesh ─────────────────────────────────────────────────────────────
   echo "  [4d] Chaos Mesh..."

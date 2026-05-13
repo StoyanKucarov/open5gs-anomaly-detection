@@ -1,10 +1,17 @@
 #!/usr/bin/env bash
 # 03-fault-detection/run_all.sh
 #
-# Phase 3: Fault detection — runs all 8 faults in sequence.
+# Phase 3: Fault detection — runs all 10 faults in sequence.
 #
-# Each fault: 2 min pre → 5 min fault → 2 min post
-# Total: ~8 faults × ~11 min = ~90 min + cooldowns
+# Each fault: PRE phase -> fault phase -> POST phase, with full
+# Prometheus + Jaeger + Loki + K8s events + NRF API + RTT collection.
+#
+# Durations are env-overridable:
+#   PRE_DURATION    (default 120s)
+#   FAULT_DURATION  (default 300s)
+#   POST_DURATION   (default 120s)
+# Boyan's main pipeline uses 600/300/300:
+#   PRE_DURATION=600 FAULT_DURATION=300 POST_DURATION=300 bash run_all.sh
 #
 # Usage:
 #   bash run_all.sh [--from N]   # skip faults 1..N-1
@@ -12,17 +19,28 @@
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../lib/common.sh"
+source "$SCRIPT_DIR/../lib/reset_workload.sh"
 
 FROM=1
 if [[ "${1:-}" == "--from" && -n "${2:-}" ]]; then
     FROM="$2"
 fi
 
-UE_COUNT=50
+PRE_DURATION="${PRE_DURATION:-120}"
+FAULT_DURATION="${FAULT_DURATION:-300}"
+POST_DURATION="${POST_DURATION:-120}"
+
+# Soft-reset the Open5GS+UERANSIM workload between every fault so each run
+# starts from a clean baseline (no stale PFCP, ghost NF regs, broken UEs).
+# Costs ~2-3 min per fault. Set RESET_BETWEEN_FAULTS=0 to disable.
+RESET_BETWEEN_FAULTS="${RESET_BETWEEN_FAULTS:-1}"
+
+UE_COUNT="${UE_COUNT:-50}"
 OUT_BASE="$DATA_DIR/03-fault-detection"
 
 echo "============================================================"
-echo " Phase 3: Fault detection (8 faults)"
+echo " Phase 3: Fault detection (10 faults)"
+echo " durations: pre=${PRE_DURATION}s fault=${FAULT_DURATION}s post=${POST_DURATION}s"
 echo "============================================================"
 
 check_cluster_ready
@@ -34,6 +52,7 @@ wait_for_pods_stable open5gs 120
 
 ensure_portforward_prometheus
 ensure_portforward_jaeger
+ensure_portforward_loki
 
 run_fault_experiment() {
     local num="$1" name="$2" manifest="$3"
@@ -45,26 +64,32 @@ run_fault_experiment() {
     echo "------------------------------------------------------------"
     echo " Fault $num: $name"
     echo "------------------------------------------------------------"
+    if [[ "$RESET_BETWEEN_FAULTS" == "1" ]]; then
+        reset_workload "$UE_COUNT"
+    fi
     bash "$LIB_DIR/run_fault.sh" \
         --name        "$name" \
         --manifest    "$CHAOS_DIR/$manifest" \
         --out         "$OUT_BASE/$name" \
-        --pre-duration   120 \
-        --fault-duration 300 \
-        --post-duration  120 \
+        --pre-duration   "$PRE_DURATION" \
+        --fault-duration "$FAULT_DURATION" \
+        --post-duration  "$POST_DURATION" \
         --step           "5s"
     echo "[cooldown] 60s between faults..."
     sleep 60
 }
 
-run_fault_experiment 1 "01-cpu-stress-amf"            "01-cpu-stress-amf.yaml"
-run_fault_experiment 2 "02-memory-pressure-upf"       "02-memory-pressure-upf.yaml"
-run_fault_experiment 3 "03-pod-crash-amf"             "03-pod-crash-amf.yaml"
-run_fault_experiment 4 "04-network-partition-amf-scp" "05-network-partition-amf-nrf.yaml"
-run_fault_experiment 5 "05-dependency-failure-nrf"    "06-dependency-failure-nrf.yaml"
-run_fault_experiment 6 "06-network-delay-nrf"         "08-network-delay-nrf.yaml"
-run_fault_experiment 7 "07-packet-loss-upf"           "07-packet-loss-upf.yaml"
-run_fault_experiment 8 "08-cpu-stress-scp"            "08-cpu-stress-scp.yaml"
+# Slug == chaos YAML basename, so lib/hooks/<slug>.sh resolves automatically.
+run_fault_experiment 1  "01-cpu-stress-amf"            "01-cpu-stress-amf.yaml"
+run_fault_experiment 2  "02-memory-pressure-upf"       "02-memory-pressure-upf.yaml"
+run_fault_experiment 3  "03-pod-crash-amf"             "03-pod-crash-amf.yaml"
+run_fault_experiment 4  "04-network-delay-gnb-amf"     "04-network-delay-gnb-amf.yaml"
+run_fault_experiment 5  "05-network-partition-amf-nrf" "05-network-partition-amf-nrf.yaml"
+run_fault_experiment 6  "06-dependency-failure-nrf"    "06-dependency-failure-nrf.yaml"
+run_fault_experiment 7  "07-packet-loss-upf"           "07-packet-loss-upf.yaml"
+run_fault_experiment 8  "07-pod-crash-smf"             "07-pod-crash-smf.yaml"
+run_fault_experiment 9  "08-cpu-stress-scp"            "08-cpu-stress-scp.yaml"
+run_fault_experiment 10 "08-network-delay-nrf"         "08-network-delay-nrf.yaml"
 
 echo ""
 echo "============================================================"

@@ -33,8 +33,12 @@ STANDARD_METRICS = [
      'rate(container_cpu_usage_seconds_total{namespace="open5gs",container!=""}[2m])'),
     ("container_memory_working_set_bytes.csv",
      'container_memory_working_set_bytes{namespace="open5gs",container!=""}'),
+    # cAdvisor in newer kube-prometheus-stack dropped *_seconds_total in favour
+    # of period counters. Throttle ratio = throttled-periods / total-periods,
+    # bounded 0..1; spikes to ~1 when a container saturates its CPU limit.
     ("container_cpu_throttled_rate.csv",
-     'rate(container_cpu_cfs_throttled_seconds_total{namespace="open5gs",container!=""}[2m])'),
+     'rate(container_cpu_cfs_throttled_periods_total{namespace="open5gs",container!=""}[2m]) '
+     '/ rate(container_cpu_cfs_periods_total{namespace="open5gs",container!=""}[2m])'),
     ("pod_restarts.csv",
      'kube_pod_container_status_restarts_total{namespace="open5gs"}'),
     ("monitoring_cpu_usage_rate.csv",

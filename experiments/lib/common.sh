@@ -18,9 +18,10 @@ CHAOS_DIR="$REPO_ROOT/kind/chaos"
 # Port-forward PIDs (tracked for cleanup)
 _PF_PIDS=()
 
-# Prometheus and Jaeger URLs (set by ensure_portforward_*)
+# Prometheus, Jaeger, and Loki URLs (set by ensure_portforward_*)
 PROM_URL="${PROM_URL:-http://127.0.0.1:9090}"
 JAEGER_URL="${JAEGER_URL:-http://127.0.0.1:16686}"
+LOKI_URL="${LOKI_URL:-http://127.0.0.1:3100}"
 
 # ---------------------------------------------------------------------------
 # Cleanup on exit
@@ -81,6 +82,16 @@ ensure_portforward_jaeger() {
     fi
 }
 
+# ensure_portforward_loki — idempotent, sets LOKI_URL
+ensure_portforward_loki() {
+    LOKI_URL="${LOKI_URL:-http://127.0.0.1:3100}"
+    if ! (echo > /dev/tcp/127.0.0.1/3100) 2>/dev/null; then
+        start_portforward monitoring svc/loki 3100 3100
+    else
+        echo "[pf] Loki already reachable at localhost:3100"
+    fi
+}
+
 # stop_portforward <local_port>
 stop_portforward() {
     local port="$1"
@@ -114,11 +125,11 @@ sleep_with_progress() {
 
 check_cluster_ready() {
     echo "[check] Verifying cluster context..."
-    kubectl cluster-info --context k3d-open5gs >/dev/null 2>&1 || {
-        echo "[ERROR] Cluster k3d-open5gs not reachable" >&2
+    kubectl cluster-info --context kind-open5gs >/dev/null 2>&1 || {
+        echo "[ERROR] Cluster kind-open5gs not reachable" >&2
         exit 1
     }
-    kubectl config use-context k3d-open5gs >/dev/null 2>&1
+    kubectl config use-context kind-open5gs >/dev/null 2>&1
     echo "[check] Cluster ready"
 }
 
@@ -211,6 +222,37 @@ collect_jaeger() {
         --url   "$JAEGER_URL" \
         --start "$start" \
         --end   "$end" \
+        --out   "$out_dir"
+}
+
+# collect_loki <start_ts> <end_ts> <out_dir>
+collect_loki() {
+    local start="$1" end="$2" out_dir="$3"
+    mkdir -p "$out_dir"
+    python3 "$LIB_DIR/collect_loki.py" \
+        --url   "$LOKI_URL" \
+        --start "$start" \
+        --end   "$end" \
+        --out   "$out_dir"
+}
+
+# collect_events <start_ts> <end_ts> <out_dir>
+collect_events() {
+    local start="$1" end="$2" out_dir="$3"
+    mkdir -p "$out_dir"
+    python3 "$LIB_DIR/collect_events.py" \
+        --namespace open5gs \
+        --start "$start" \
+        --end   "$end" \
+        --out   "$out_dir"
+}
+
+# collect_nrf <out_dir> — snapshots current NRF instance counts (no time window)
+collect_nrf() {
+    local out_dir="$1"
+    mkdir -p "$out_dir"
+    python3 "$LIB_DIR/collect_nrf.py" \
+        --namespace open5gs \
         --out   "$out_dir"
 }
 

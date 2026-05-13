@@ -1,9 +1,16 @@
 # Cloud-Native 5G Fault Injection — Reproduction Pack
 
-Everything needed to stand up the platform and run the 8 fault-injection experiments
+Everything needed to stand up the platform and run the fault-injection experiments
 that produce the raw telemetry for the fault atlas study.
 
 This pack only covers **platform setup + data collection**. Analysis is out of scope here.
+
+> **Extended setup notes:** See [`EXTENSIONS.md`](./EXTENSIONS.md) for the full
+> list of changes added on top of this base — extra signal collectors (Loki,
+> K8s events, NRF API, RTT), synthetic traffic generators, per-fault hooks,
+> the soft-reset workflow between faults, bug fixes encountered during bring-up,
+> the now-10-fault dispatch in Phase 3, and Boyan's run invocation
+> (`PRE_DURATION=600 FAULT_DURATION=300 POST_DURATION=300`).
 
 ---
 

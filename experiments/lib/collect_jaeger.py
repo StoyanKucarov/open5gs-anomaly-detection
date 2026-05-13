@@ -22,16 +22,21 @@ import urllib.parse
 from pathlib import Path
 from collections import defaultdict
 
-SERVICES_TO_COLLECT = [
-    "open5gs-amf", "open5gs-smf", "open5gs-upf", "open5gs-nrf",
-    "open5gs-scp", "open5gs-ausf", "open5gs-udm", "open5gs-udr",
-    "open5gs-pcf", "open5gs-nssf", "open5gs-bsf",
-]
+# Skip Jaeger's own self-trace service and infrastructure noise.
+SERVICE_BLOCKLIST = {"jaeger", "jaeger-query", "jaeger-collector"}
+
+
+def discover_services(jaeger_url: str) -> list:
+    """Fetch the live list of services from Jaeger. Beyla autodetect strips
+    the deployment prefix, so service names are 'amf', 'smf', etc. — not
+    'open5gs-amf'. Hardcoding the list breaks on naming convention drift."""
+    data = jaeger_get(jaeger_url, "/api/services", {})
+    return [s for s in data.get("data", []) if s not in SERVICE_BLOCKLIST]
 
 
 def jaeger_get(url: str, path: str, params: dict) -> dict:
-    qs = urllib.parse.urlencode(params)
-    req_url = f"{url}{path}?{qs}"
+    qs = urllib.parse.urlencode(params) if params else ""
+    req_url = f"{url}{path}?{qs}" if qs else f"{url}{path}"
     for attempt in range(3):
         try:
             with urllib.request.urlopen(req_url, timeout=30) as resp:
@@ -110,8 +115,12 @@ def main():
     start_us = args.start * 1_000_000
     end_us = args.end * 1_000_000
 
+    services = discover_services(args.url)
+    if not services:
+        print("  [jaeger] WARN: no services in /api/services", file=sys.stderr)
+
     all_spans = []
-    for svc in SERVICES_TO_COLLECT:
+    for svc in services:
         traces = collect_service(args.url, svc, start_us, end_us)
         spans = flatten_spans(traces, svc)
         all_spans.extend(spans)
