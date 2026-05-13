@@ -90,7 +90,8 @@ else
     --namespace monitoring \
     --set promtail.enabled=true \
     --set loki.persistence.enabled=false \
-    --set grafana.enabled=false
+    --set grafana.enabled=false \
+    --set loki.isDefault=false
 
   helm install jaeger jaegertracing/jaeger \
     --namespace monitoring \
