@@ -49,6 +49,21 @@ STANDARD_METRICS = [
      'rate(node_cpu_seconds_total{mode!="idle"}[2m])'),
     ("node_memory_available.csv",
      'node_memory_MemAvailable_bytes'),
+    # --- Beyla eBPF application metrics (compare against Prometheus infra layer) ---
+    ("beyla_http_server_duration.csv",
+     'rate(http_server_request_duration_seconds_sum{k8s_namespace_name="open5gs"}[2m])'
+     ' / rate(http_server_request_duration_seconds_count{k8s_namespace_name="open5gs"}[2m])'),
+    ("beyla_http_client_duration.csv",
+     'rate(http_client_request_duration_seconds_sum{k8s_namespace_name="open5gs"}[2m])'
+     ' / rate(http_client_request_duration_seconds_count{k8s_namespace_name="open5gs"}[2m])'),
+    ("beyla_http_server_request_rate.csv",
+     'rate(http_server_request_duration_seconds_count{k8s_namespace_name="open5gs"}[2m])'),
+    ("beyla_http_server_error_rate.csv",
+     'rate(http_server_request_duration_seconds_count{k8s_namespace_name="open5gs",http_response_status_code=~"5.."}[2m])'),
+    ("beyla_cpu_usage_rate.csv",
+     'rate(container_cpu_usage_seconds_total{namespace="open5gs",pod=~"beyla.*",container!=""}[2m])'),
+    ("beyla_memory_working_set.csv",
+     'container_memory_working_set_bytes{namespace="open5gs",pod=~"beyla.*",container!=""}'),
 ]
 
 

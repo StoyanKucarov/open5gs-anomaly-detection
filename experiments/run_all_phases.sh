@@ -1,76 +1,55 @@
 #!/usr/bin/env bash
 # experiments/run_all_phases.sh
 #
-# Top-level orchestrator: runs all four experimental phases in sequence,
-# then runs the analysis script automatically.
+# Top-level orchestrator. Runs all three experiment groups in sequence.
+#
+# Groups:
+#   A — Observability overhead  (no-telemetry baseline, Prometheus, Beyla, scaling)
+#   B — Log strategies          (CPU, storage, visibility, strategy×scale)
+#   C — Fault detection         (18 faults, full 5-signal collection)
 #
 # Usage:
-#   bash run_all_phases.sh [--from-phase <0|1|2|3|4|5>]
+#   bash run_all_phases.sh                  # run A → B → C
+#   bash run_all_phases.sh --from B         # skip A, start from B
+#   bash run_all_phases.sh --from C         # skip A+B, run only C
 #
-# Phases:
-#   1 — CPU overhead (log strategies)
-#   2 — Storage requirements (log strategies)
-#   3 — System visibility / fault detection
-#   4 — Scalability: NF & Beyla overhead (Prometheus + Jaeger)
-#   5 — Scalability: log strategies (Loki storage + Promtail CPU)
+# Estimated total runtime:
+#   600/300/300 fault durations: ~21 h
+#   120/300/120 fault durations: ~17 h
 #
-# Estimated total runtime: ~6-7 hours
 # Run in a tmux/screen session.
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-FROM_PHASE=0
-if [[ "${1:-}" == "--from-phase" && -n "${2:-}" ]]; then
-    FROM_PHASE="$2"
+FROM_GROUP="A"
+if [[ "${1:-}" == "--from" && -n "${2:-}" ]]; then
+    FROM_GROUP="$2"
 fi
 
-run_phase() {
-    local num="$1" name="$2" script="$3"
-    if [[ $num -lt $FROM_PHASE ]]; then
-        echo "[skip] Phase $num ($name)"
+run_group() {
+    local label="$1" script="$2"
+    if [[ "$FROM_GROUP" > "$label" ]]; then
+        echo "[skip] Group $label"
         return
     fi
     echo ""
     echo "████████████████████████████████████████████████████████████"
-    echo " PHASE $num: $name"
+    echo " GROUP $label"
     echo "████████████████████████████████████████████████████████████"
     bash "$script"
     echo ""
-    echo "[phase $num done] Sleeping 2 minutes before next phase..."
+    echo "[group $label done] Sleeping 2 minutes before next group..."
     sleep 120
 }
 
-run_phase 0 "Baseline"              "$SCRIPT_DIR/00-baseline/run.sh"
-run_phase 1 "Prometheus Overhead"   "$SCRIPT_DIR/01-overhead-prometheus/run.sh"
-run_phase 2 "Beyla/eBPF Overhead"   "$SCRIPT_DIR/02-overhead-ebpf/run.sh"
-run_phase 3 "Fault Detection"       "$SCRIPT_DIR/03-fault-detection/run_all.sh"
-run_phase 4 "Scalability"           "$SCRIPT_DIR/04-scalability/run.sh"
-run_phase 1 "CPU overhead"          "$SCRIPT_DIR/05-cpu-overhead/run.sh"
-run_phase 2 "Storage requirements"  "$SCRIPT_DIR/06-storage-requirements/run.sh"
-run_phase 3 "System visibility"     "$SCRIPT_DIR/07-system-visibility/run.sh"
-run_phase 4 "Scalability (NF/Beyla overhead)" "$SCRIPT_DIR/04-scalability/run.sh"
-run_phase 5 "Scalability (log strategies)"  "$SCRIPT_DIR/04-scalability/run-str.sh"
+run_group A "$SCRIPT_DIR/A-observability-overhead/run_all.sh"
+run_group B "$SCRIPT_DIR/B-log-strategies/run_all.sh"
+run_group C "$SCRIPT_DIR/C-fault-detection/run_all.sh"
 
 echo ""
 echo "████████████████████████████████████████████████████████████"
-echo " ALL PHASES COMPLETE"
+echo " ALL GROUPS COMPLETE"
 echo " Data in: $REPO_ROOT/data/experiments/"
 echo "████████████████████████████████████████████████████████████"
-
-# echo ""
-# echo "████████████████████████████████████████████████████████████"
-# echo " RUNNING ANALYSIS"
-# echo "████████████████████████████████████████████████████████████"
-# python3 "$REPO_ROOT/data/analysis/analyse.py" \
-#     --data-dir "$REPO_ROOT/data/experiments" \
-#     --out "$REPO_ROOT/data/analysis"
-
-# echo ""
-# echo "████████████████████████████████████████████████████████████"
-# echo " ALL_DONE"
-# echo " Figures : $REPO_ROOT/data/analysis/figures"
-# echo " Tables  : $REPO_ROOT/data/analysis/tables"
-# echo " Summary : $REPO_ROOT/data/analysis/summary"
-# echo "████████████████████████████████████████████████████████████"

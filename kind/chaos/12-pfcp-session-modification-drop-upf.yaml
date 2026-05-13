@@ -1,0 +1,80 @@
+# Fault class: Network Packet Loss + Corruption (PFCP Session Modification — DROP/FAR Attack)
+# Target: UPF — N4 control path and N6 downlink data path
+# Expected propagation: Application only (UPF pod stays alive; RAN connectivity intact)
+#   Infrastructure: no pod restart; UPF memory/CPU unaffected
+#   Orchestration:  no K8s events; HPA quiescent
+#   Application:    downlink GTP-U tunnel severed — UE can send uplink but receives
+#                   no downlink; SMF observes FAR update acknowledgement failure or
+#                   applies the malicious rule update that zeros out the TEID/base-station-IP;
+#                   N6 egress to DN blocked; uplink-only traffic may partially restore
+#                   the tunnel (per source — sending data to UPF re-establishes GTP-U)
+# Key signals: upf_downlink_packets_dropped_total counter rising sharply,
+#              gtp_tunnel_active{direction="downlink"} drops to zero,
+#              N6 egress bytes drop while N4 control traffic remains present,
+#              SMF logs: "FAR not found for TEID <x>"
+# Attack model: adversary modifies FAR entries associated with the TEID and gNB IP,
+#               removing the downlink forwarding rule; modelled as corruption on the N4
+#               control channel (invalidates FAR writes) plus full loss on N6 downlink
+# Source: Amponis et al., "Threatening the 5G core via PFCP DoS attacks: the case of
+#         blocking UAV communications," EURASIP J. Wireless Comms & Networking, Dec 2022.
+#         https://doi.org/10.1186/s13638-022-02204-5
+#         ("PFCP Session Modification DoS Attack (DROP)" — Section 4.3)
+#
+# Apply:  kubectl apply -f 12-pfcp-session-modification-drop-upf.yaml
+# Remove: kubectl delete -f 12-pfcp-session-modification-drop-upf.yaml
+---
+# Phase 1 of 2: corrupt N4 PFCP Modification Requests arriving at UPF
+# 40 % corruption with high correlation creates burst-corrupted FAR update windows,
+# causing the UPF to silently discard or misapply forwarding-rule updates
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: pfcp-modification-drop-n4-corrupt
+  namespace: open5gs
+spec:
+  action: corrupt
+  mode: all
+  selector:
+    namespaces:
+      - open5gs
+    labelSelectors:
+      app.kubernetes.io/name: upf
+      app.kubernetes.io/instance: open5gs
+  direction: to            # corrupt inbound PFCP Modification Requests (SMF → UPF)
+  corrupt:
+    corrupt: "40"          # percentage of packets corrupted
+    correlation: "60"      # high correlation → burst corruption of a rule-update window
+  target:
+    mode: all
+    selector:
+      namespaces:
+        - open5gs
+      labelSelectors:
+        app.kubernetes.io/name: smf
+        app.kubernetes.io/instance: open5gs
+  duration: "3m"
+---
+# Phase 2 of 2: drop all N6 downlink (UPF → DN direction)
+# models the GTP-U downlink tunnel being severed after FAR removal;
+# uplink direction intentionally left intact (UE can still send → may trigger tunnel restore)
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: pfcp-modification-drop-n6-downlink-loss
+  namespace: open5gs
+spec:
+  action: loss
+  mode: all
+  selector:
+    namespaces:
+      - open5gs
+    labelSelectors:
+      app.kubernetes.io/name: upf
+      app.kubernetes.io/instance: open5gs
+  direction: to            # UPF → DN (downlink) dropped; DN → UPF (uplink) intact
+  loss:
+    loss: "100"
+    correlation: "0"
+  externalTargets:
+    - "10.45.0.0/16"       # replace with your DN/internet-facing subnet
+  duration: "3m"
