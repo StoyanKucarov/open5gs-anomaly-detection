@@ -49,6 +49,16 @@ STANDARD_METRICS = [
      'rate(node_cpu_seconds_total{mode!="idle"}[2m])'),
     ("node_memory_available.csv",
      'node_memory_MemAvailable_bytes'),
+    # --- Pod health (kube-state-metrics) ---
+    ("pod_ready.csv",
+     'kube_pod_status_ready{namespace="open5gs",condition="true"}'),
+    ("pod_running.csv",
+     'kube_pod_status_phase{namespace="open5gs",phase="Running"}'),
+    # --- Network I/O ---
+    ("network_rx_bytes_rate.csv",
+     'rate(container_network_receive_bytes_total{namespace="open5gs"}[2m])'),
+    ("network_tx_bytes_rate.csv",
+     'rate(container_network_transmit_bytes_total{namespace="open5gs"}[2m])'),
     # --- Beyla eBPF application metrics (compare against Prometheus infra layer) ---
     ("beyla_http_server_duration.csv",
      'rate(http_server_request_duration_seconds_sum{k8s_namespace_name="open5gs"}[2m])'
@@ -60,6 +70,10 @@ STANDARD_METRICS = [
      'rate(http_server_request_duration_seconds_count{k8s_namespace_name="open5gs"}[2m])'),
     ("beyla_http_server_error_rate.csv",
      'rate(http_server_request_duration_seconds_count{k8s_namespace_name="open5gs",http_response_status_code=~"5.."}[2m])'),
+    ("beyla_http_client_request_rate.csv",
+     'rate(http_client_request_duration_seconds_count{k8s_namespace_name="open5gs"}[2m])'),
+    ("beyla_http_client_error_rate.csv",
+     'rate(http_client_request_duration_seconds_count{k8s_namespace_name="open5gs",http_response_status_code=~"5.."}[2m])'),
     ("beyla_cpu_usage_rate.csv",
      'rate(container_cpu_usage_seconds_total{namespace="open5gs",pod=~"beyla.*",container!=""}[2m])'),
     ("beyla_memory_working_set.csv",
