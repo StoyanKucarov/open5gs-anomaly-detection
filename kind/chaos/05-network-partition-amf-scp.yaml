@@ -9,29 +9,29 @@
 # Key signals: error log spike in AMF + SCP, pod_running_count stable (no crash),
 #              re-registration loop failures visible in Loki
 #
-# Apply:  kubectl apply -f 05-network-partition-amf-nrf.yaml
-# Remove: kubectl delete -f 05-network-partition-amf-nrf.yaml
+# Apply:  kubectl apply -f 05-network-partition-amf-scp.yaml
+# Remove: kubectl delete -f 05-network-partition-amf-scp.yaml
 apiVersion: chaos-mesh.org/v1alpha1
 kind: NetworkChaos
 metadata:
-  name: network-partition-amf-nrf
-  namespace: open5gs
+    name: network-partition-amf-nrf
+    namespace: open5gs
 spec:
-  action: partition
-  mode: all
-  selector:
-    namespaces:
-      - open5gs
-    labelSelectors:
-      app.kubernetes.io/name: amf
-      app.kubernetes.io/instance: open5gs
-  direction: both
-  target:
+    action: partition
     mode: all
     selector:
-      namespaces:
-        - open5gs
-      labelSelectors:
-        app.kubernetes.io/name: scp
-        app.kubernetes.io/instance: open5gs
-  duration: "5m"
+        namespaces:
+            - open5gs
+        labelSelectors:
+            app.kubernetes.io/name: amf
+            app.kubernetes.io/instance: open5gs
+    direction: both
+    target:
+        mode: all
+        selector:
+            namespaces:
+                - open5gs
+            labelSelectors:
+                app.kubernetes.io/name: scp
+                app.kubernetes.io/instance: open5gs
+    duration: "5m"

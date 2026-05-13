@@ -233,7 +233,7 @@ BASELINE_DURATION=600 FAULT_DURATION=300 RECOVERY_DURATION=300 \
 | 3   | `pod-crash-amf`          | `03-pod-crash-amf.yaml`             | Crash            | AMF             | Tears down gNB SCTP — script auto-restarts gNB+UEs in recovery |
 | 4   | `pod-crash-smf`          | `07-pod-crash-smf.yaml`             | Crash            | SMF             | Stale PFCP — script auto-restarts SMF in recovery              |
 | 5   | `network-delay`          | `04-network-delay-gnb-amf.yaml`     | Network          | AMF→SCP, 500 ms | Invisible to Beyla; RTT confirmed via ping                     |
-| 6   | `network-partition`      | `05-network-partition-amf-nrf.yaml` | Network          | AMF↔SCP         | Target is SCP, not NRF (Model D indirect SBI)                  |
+| 6   | `network-partition`      | `05-network-partition-amf-scp.yaml` | Network          | AMF↔SCP         | Target is SCP, not NRF (Model D indirect SBI)                  |
 | 7   | `dependency-failure-nrf` | `06-dependency-failure-nrf.yaml`    | Dependency       | NRF (kill)      | Recovery waits 30 s for NF re-registration                     |
 | 8   | `network-delay-nrf`      | `08-network-delay-nrf.yaml`         | Slow dependency  | NRF, 500 ms     | Gradual SBI latency vs hard kill                               |
 
@@ -326,7 +326,7 @@ reproduce/
 │       ├── 02-memory-pressure-upf.yaml
 │       ├── 03-pod-crash-amf.yaml
 │       ├── 04-network-delay-gnb-amf.yaml
-│       ├── 05-network-partition-amf-nrf.yaml
+│       ├── 05-network-partition-amf-scp.yaml
 │       ├── 06-dependency-failure-nrf.yaml
 │       ├── 07-pod-crash-smf.yaml
 │       └── 08-network-delay-nrf.yaml

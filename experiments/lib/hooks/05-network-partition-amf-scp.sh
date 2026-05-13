@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Hook: 05-network-partition-amf-nrf
+# Hook: 05-network-partition-amf-scp
 #
 # Target is AMF<->SCP (Open5GS Model D indirect SBI: AMF never talks to
 # NRF directly). 100% packet drop is invisible to Beyla; the only proof

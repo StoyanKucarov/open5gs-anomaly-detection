@@ -84,7 +84,7 @@ run_fault_experiment 1  "01-cpu-stress-amf"                        "01-cpu-stres
 run_fault_experiment 2  "02-memory-pressure-upf"                   "02-memory-pressure-upf.yaml"
 run_fault_experiment 3  "03-pod-crash-amf"                         "03-pod-crash-amf.yaml"
 run_fault_experiment 4  "04-network-delay-gnb-amf"                 "04-network-delay-gnb-amf.yaml"
-run_fault_experiment 5  "05-network-partition-amf-nrf"             "05-network-partition-amf-nrf.yaml"
+run_fault_experiment 5  "05-network-partition-amf-scp"             "05-network-partition-amf-scp.yaml"
 run_fault_experiment 6  "06-dependency-failure-nrf"                "06-dependency-failure-nrf.yaml"
 run_fault_experiment 7  "07-packet-loss-upf"                       "07-packet-loss-upf.yaml"
 run_fault_experiment 8  "08-pod-crash-smf"                         "08-pod-crash-smf.yaml"
