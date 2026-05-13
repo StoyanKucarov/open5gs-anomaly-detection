@@ -70,7 +70,6 @@ reset_workload() {
     kubectl rollout restart deployment/open5gs-smf -n open5gs
     kubectl rollout status  deployment/open5gs-smf -n open5gs --timeout=60s
     kubectl rollout restart deployment/ueransim-ues -n open5gs
-    kubectl rollout restart deployment/ueransim-gnb-ues -n open5gs
     kubectl rollout status  deployment/ueransim-ues -n open5gs --timeout=60s
     sleep 10
     echo "[reset] workload ready"

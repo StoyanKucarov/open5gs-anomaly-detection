@@ -42,14 +42,14 @@ run_phase() {
     sleep 120
 }
 
-#run_phase 0 "Baseline"              "$SCRIPT_DIR/00-baseline/run.sh"
-# run_phase 1 "Prometheus Overhead"   "$SCRIPT_DIR/01-overhead-prometheus/run.sh"
-# run_phase 2 "Beyla/eBPF Overhead"   "$SCRIPT_DIR/02-overhead-ebpf/run.sh"
-# run_phase 3 "Fault Detection"       "$SCRIPT_DIR/03-fault-detection/run_all.sh"
-# run_phase 4 "Scalability"           "$SCRIPT_DIR/04-scalability/run.sh"
-run_phase 1 "CPU overhead"          "$SCRIPT_DIR/01-cpu-overhead/run.sh"
-run_phase 2 "Storage requirements"  "$SCRIPT_DIR/02-storage-requirements/run.sh"
-run_phase 3 "System visibility"     "$SCRIPT_DIR/03-system-visibility/run.sh"
+run_phase 0 "Baseline"              "$SCRIPT_DIR/00-baseline/run.sh"
+run_phase 1 "Prometheus Overhead"   "$SCRIPT_DIR/01-overhead-prometheus/run.sh"
+run_phase 2 "Beyla/eBPF Overhead"   "$SCRIPT_DIR/02-overhead-ebpf/run.sh"
+run_phase 3 "Fault Detection"       "$SCRIPT_DIR/03-fault-detection/run_all.sh"
+run_phase 4 "Scalability"           "$SCRIPT_DIR/04-scalability/run.sh"
+run_phase 1 "CPU overhead"          "$SCRIPT_DIR/05-cpu-overhead/run.sh"
+run_phase 2 "Storage requirements"  "$SCRIPT_DIR/06-storage-requirements/run.sh"
+run_phase 3 "System visibility"     "$SCRIPT_DIR/07-system-visibility/run.sh"
 run_phase 4 "Scalability (strategies)" "$SCRIPT_DIR/04-scalability/run-str.sh"
 
 echo ""

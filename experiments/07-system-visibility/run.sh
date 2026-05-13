@@ -40,16 +40,12 @@ perform_visibility_analysis() {
     
     local query='{container="open5gs-amf"}'
     
-    kubectl port-forward -n monitoring svc/loki 3100:3100 >/dev/null 2>&1 &
-    local pf_pid=$!
-    sleep 5 
+    ensure_portforward_loki
 
     local response=$(curl -G -s "http://localhost:3100/loki/api/v1/query_range" \
     --data-urlencode "query=$query" \
     --data-urlencode "since=4h" \
     --data-urlencode "limit=10000")
-
-    kill $pf_pid 2>/dev/null || true
 
     local logs=$(echo "$response" | jq -r '.data.result[].values[][1]' 2>/dev/null || echo "")
     
