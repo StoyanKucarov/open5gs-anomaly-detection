@@ -9,6 +9,10 @@ source "$SCRIPT_DIR/../lib/apply_strategy.sh"
 STRATEGIES=("baseline" "compression" "denum" "preprocessing" "dynamic-logging")
 UE_COUNT=50
 
+if [[ $# -gt 0 ]]; then
+    STRATEGIES=("$@")
+fi
+
 MANIFESTS=(
     "01-cpu-stress-amf.yaml"
     "03-pod-crash-amf.yaml"
@@ -23,16 +27,36 @@ perform_visibility_analysis() {
     local strategy=$2
     local out_file=$3
     
-    local start_ts=$(jq -r '.timeline.fault.start' "$out_file/visibility_report.json")
-    local end_ts=$(jq -r '.timeline.fault.end' "$out_file/visibility_report.json")
+    # local start_s=$(jq -r '.timeline.fault.start' "$out_file/visibility_report.json")
+    # local end_s=$(jq -r '.timeline.fault.end' "$out_file/visibility_report.json")
 
-    echo "[analysis] Querying Loki for fault signatures ($fault_name)..."
+    # local start_ns="$((start_s - 5))000000000"
+    # local end_ns="$((end_s + 5))000000000"
+
+    echo "[analysis] Waiting 15s for Loki to index chunks..."
+    sleep 15
+
+    echo "[analysis] Querying Loki API for fault signatures ($fault_name)..."
     
-    local logs=$(kubectl exec -n monitoring svc/loki -- \
-        logcli query "{app='amf'}" --from-posix "$start_ts" --to-posix "$end_ts" --limit 100)
+    local query='{container="open5gs-amf"}'
     
-    local count=$(echo "$logs" | grep -iE "error|fail|panic|fatal|refused" | wc -l)
+    kubectl port-forward -n monitoring svc/loki 3100:3100 >/dev/null 2>&1 &
+    local pf_pid=$!
+    sleep 5 
+
+    local response=$(curl -G -s "http://localhost:3100/loki/api/v1/query_range" \
+    --data-urlencode "query=$query" \
+    # --data-urlencode "start=$start_ns" \
+    # --data-urlencode "end=$end_ns" \
+    --data-urlencode "since=4h" \
+    --data-urlencode "limit=10000")
+
+    kill $pf_pid 2>/dev/null || true
+
+    local logs=$(echo "$response" | jq -r '.data.result[].values[][1]' 2>/dev/null || echo "")
     
+    local count=$(echo "$logs" | grep -iE "error|fail|panic|fatal|refused|timeout|dropped|expired|sbi" | wc -l)  
+      
     python3 -c "
 import json
 with open('$out_file/visibility_report.json', 'r+') as f:
@@ -41,12 +65,13 @@ with open('$out_file/visibility_report.json', 'r+') as f:
     data['log_sample_count'] = $count
     f.seek(0)
     json.dump(data, f, indent=2)
+    f.truncate()
 "
     
     if [ "$count" -gt 0 ]; then
-        echo "  >> SUCCESS: Fault detected in reduced logs."
+        echo "  >> SUCCESS: Fault detected ($count signatures found)."
     else
-        echo "  >> FAILURE: Fault obscured by reduction strategy!"
+        echo "  >> FAILURE: No fault signatures found in Loki for this window."
     fi
 }
 

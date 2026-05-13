@@ -5,9 +5,12 @@ promtail:
         - docker: {}
         - regex:
             expression: "^(?P<nf_proc>[A-Z_]+) ?: ?(?P<var_data>.*)$"
-        - labels:
-            template_id: nf_proc
         - replace:
             source: "var_data"
-            expression: ".*"
-            replace: "<DATA_REDACTED>"   
+            expression: '([a-fA-F0-9]{10,}|[0-9]{10,})'
+            replace: "<ID>"
+        - template:
+            source: "output"
+            template: "{{ .nf_proc }}: {{ .var_data }}"
+        - output:
+            source: "output"
