@@ -1,0 +1,23 @@
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: network-partition-amf
+  namespace: chaos-mesh
+  # Simulates NF Spoofing / Rogue AMF
+  # Models the effect of a rogue AMF registering with NRF and intercepting
+  # UE registration traffic. The legitimate AMF is partitioned from the
+  # network, simulating it being bypassed. UEs attempting to register
+  # receive no response from the legitimate AMF.
+  # Effect: AMF becomes unreachable → UE registrations fail → no new
+  # PDU sessions → SMF/UPF idle while AMF logs connection errors.
+  # NRF and AUSF remain healthy — distinct from NRF cascade and AUSF DoS.
+spec:
+  action: partition
+  mode: one
+  selector:
+    namespaces:
+      - open5gs
+    labelSelectors:
+      app.kubernetes.io/name: amf
+  direction: both
+  duration: "180s"

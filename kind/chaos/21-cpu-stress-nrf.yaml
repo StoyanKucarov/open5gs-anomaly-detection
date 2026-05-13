@@ -1,0 +1,25 @@
+apiVersion: chaos-mesh.org/v1alpha1
+kind: StressChaos
+metadata:
+  name: cpu-stress-nrf
+  namespace: chaos-mesh
+  # Simulates OAuth Token Exhaustion on NRF
+  # Models a scenario where a malicious NF floods NRF with OAuth token
+  # requests, exhausting NRF CPU so that legitimate NFs cannot obtain
+  # access tokens for SBI calls. Unlike pod-failure-nrf, NRF stays alive
+  # but becomes too slow to serve requests — a degradation not a crash.
+  # Effect: NRF CPU spikes (visible in metrics), token request timeouts
+  # appear in traces, dependent NFs log auth failures. NRF is NOT silent
+  # — this distinguishes it from the NRF cascade pod-failure fingerprint.
+spec:
+  mode: one
+  selector:
+    namespaces:
+      - open5gs
+    labelSelectors:
+      app.kubernetes.io/name: nrf
+  stressors:
+    cpu:
+      workers: 4
+      load: 90
+  duration: "180s"

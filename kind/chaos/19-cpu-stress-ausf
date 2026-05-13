@@ -1,0 +1,23 @@
+apiVersion: chaos-mesh.org/v1alpha1
+kind: StressChaos
+metadata:
+  name: cpu-stress-ausf
+  namespace: chaos-mesh
+  # Simulates Authentication Flooding / DoS on AUSF
+  # Models a scenario where a flood of fake UE registration requests
+  # overwhelms the authentication server, exhausting its CPU capacity.
+  # Effect: AUSF CPU spikes → authentication timeouts → AMF cannot
+  # register UEs → cascades to SMF (no sessions) but NRF stays healthy.
+  # This produces a different cross-modal fingerprint than NRF cascade.
+spec:
+  mode: one
+  selector:
+    namespaces:
+      - open5gs
+    labelSelectors:
+      app.kubernetes.io/name: ausf
+  stressors:
+    cpu:
+      workers: 4
+      load: 90
+  duration: "180s"

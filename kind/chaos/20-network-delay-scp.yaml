@@ -1,0 +1,25 @@
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: network-delay-scp
+  namespace: chaos-mesh
+  # Simulates SCP Interception (Man-in-the-Middle)
+  # Models a compromised or rogue SCP proxy introducing latency on all
+  # SBI traffic passing through it. Since all NF-to-NF calls in Model D
+  # go via SCP, this degrades the entire control plane simultaneously.
+  # Effect: all SBI calls slow down → timeout errors across all NFs →
+  # SCP latency visible in traces, metrics show retry storms.
+spec:
+  action: delay
+  mode: one
+  selector:
+    namespaces:
+      - open5gs
+    labelSelectors:
+      app.kubernetes.io/name: scp
+  delay:
+    latency: "500ms"
+    jitter: "100ms"
+    correlation: "50"
+  direction: both
+  duration: "180s"

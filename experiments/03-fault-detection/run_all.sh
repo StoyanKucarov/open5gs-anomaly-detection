@@ -97,6 +97,11 @@ run_fault_experiment 14 "14-pfcp-session-modification-dupl-upf"    "14-pfcp-sess
 run_fault_experiment 15 "15-amf-internal-fault-pod-kill"           "15-amf-internal-fault-pod-kill.yaml"
 run_fault_experiment 16 "16-smf-internal-fault-pod-kill"           "16-smf-internal-fault-pod-kill.yaml"
 run_fault_experiment 17 "17-upf-infrastructure-packet-loss"        "17-upf-infrastructure-packet-loss.yaml"
+run_fault_experiment 18 "18-nrf-cascase"                           "18-nrf-cascase.yaml"
+run_fault_experiment 19 "19-cpu-stress-ausf"                       "19-cpu-stress-ausf.yaml"
+run_fault_experiment 20 "20-network-delay-scp"                     "20-network-delay-scp.yaml"
+run_fault_experiment 21 "21-cpu-stress-nrf"                        "21-cpu-stress-nrf.yaml"
+run_fault_experiment 22 "22-network-partition-amf"                 "22-network-partition-amf.yaml"
 
 echo ""
 echo "============================================================"
