@@ -94,7 +94,7 @@ for STRATEGY in "${STRATEGIES[@]}"; do
         echo ""
         echo ">>> Injecting Fault: $FAULT_NAME (Strategy: $STRATEGY)"
         
-        bash "$LIB_DIR/run_fault_loki.sh" \
+        bash "$SCRIPT_DIR/run_fault_loki.sh" \
             --name "$FAULT_NAME" \
             --strategy "$STRATEGY" \
             --manifest "$CHAOS_DIR/$YAML" \
