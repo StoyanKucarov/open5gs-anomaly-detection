@@ -1,25 +1,35 @@
+# Fault class: CPU Stress — OAuth Token Exhaustion on NRF
+# Target: NRF — Network Repository Function, service registry and OAuth token server
+# Expected propagation:
+#   Infrastructure: NRF CPU throttling visible in container_cpu_cfs_throttled_seconds_total
+#   Orchestration:  Pod may be throttled by K8s resource limits
+#   Application:    NRF too slow to serve discovery/token requests → dependent NFs timeout
+#                   Unlike pod-kill, NRF stays alive but degraded — slower failure propagation
+# Key signals:
+#   Metrics: NRF cpu_rate spikes (NOT silent like pod-kill), SCP net_tx increases
+#   Logs:    NRF log_error increases (still logging unlike pod-kill), all NFs log timeouts
+#   Traces:  NRF p99_ms spikes, NRF error_rate increases; all NFs error_rate increases
+# Cross-modal fingerprint: NRF is LOUD (high CPU, errors, high latency spans);
+#   opposite of 18-nrf-cascade where NRF is completely silent.
+#   Gradual degradation vs hard failure — different temporal pattern in timeseries.
+#
+# Apply:  kubectl apply -f 21-cpu-stress-nrf.yaml
+# Remove: kubectl delete -f 21-cpu-stress-nrf.yaml
 apiVersion: chaos-mesh.org/v1alpha1
 kind: StressChaos
 metadata:
   name: cpu-stress-nrf
-  namespace: chaos-mesh
-  # Simulates OAuth Token Exhaustion on NRF
-  # Models a scenario where a malicious NF floods NRF with OAuth token
-  # requests, exhausting NRF CPU so that legitimate NFs cannot obtain
-  # access tokens for SBI calls. Unlike pod-failure-nrf, NRF stays alive
-  # but becomes too slow to serve requests — a degradation not a crash.
-  # Effect: NRF CPU spikes (visible in metrics), token request timeouts
-  # appear in traces, dependent NFs log auth failures. NRF is NOT silent
-  # — this distinguishes it from the NRF cascade pod-failure fingerprint.
+  namespace: open5gs
 spec:
-  mode: one
+  mode: all
   selector:
     namespaces:
       - open5gs
     labelSelectors:
       app.kubernetes.io/name: nrf
+      app.kubernetes.io/instance: open5gs
   stressors:
     cpu:
-      workers: 4
-      load: 90
-  duration: "180s"
+      workers: 2
+      load: 80
+  duration: "5m"
