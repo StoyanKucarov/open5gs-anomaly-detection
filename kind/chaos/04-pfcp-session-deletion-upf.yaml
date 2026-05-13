@@ -1,0 +1,79 @@
+# Fault class: Network Packet Loss — Full Blackhole (PFCP Session Deletion Attack)
+# Target: UPF — N4 control path (SMF↔UPF) and N6 data path (UPF↔DN)
+# Expected propagation: Application only (no infra/orchestration signal — UPF pod stays alive)
+#   Infrastructure: no CPU/memory anomaly; pod remains Running
+#   Orchestration:  no restart; readiness probe continues to pass (PFCP heartbeat on a
+#                   separate port is unaffected unless explicitly targeted)
+#   Application:    UPF silently drops all forwarded user-plane packets on N6;
+#                   SMF detects PFCP session loss after heartbeat window expires;
+#                   UE retains RAN registration (N1/N2 intact) but loses DN reachability;
+#                   connectivity restores only when UE re-registers or moves to new gNB
+#                   (new SEID association neutralises the stale deletion — per source)
+# Key signals: n6_tx_packets_total drops to zero while n4_rx_packets_total stays non-zero,
+#              ue_pdu_session_active gauge drops without ue_registered gauge changing,
+#              SMF logs emit "PFCP session not found" for affected SEIDs
+# Attack model: an adversary with N4 access sends unauthorised Session Deletion Requests,
+#               severing SMF's view of the session; modelled as a full loss on the N4
+#               response path (UPF cannot confirm sessions to SMF) combined with N6 blackhole
+# Source: Amponis et al., "Threatening the 5G core via PFCP DoS attacks: the case of
+#         blocking UAV communications," EURASIP J. Wireless Comms & Networking, Dec 2022.
+#         https://doi.org/10.1186/s13638-022-02204-5
+#         ("PFCP Session Deletion DoS Attack" — Section 4.2)
+#
+# Apply:  kubectl apply -f 04-pfcp-session-deletion-upf.yaml
+# Remove: kubectl delete -f 04-pfcp-session-deletion-upf.yaml
+---
+# Phase 1 of 2: black-hole N4 PFCP response path (UPF → SMF direction)
+# SMF receives no acknowledgements; after the PFCP heartbeat timeout it tears down
+# its local session state, mirroring the effect of a deletion request
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: pfcp-session-deletion-n4-loss
+  namespace: open5gs
+spec:
+  action: loss
+  mode: all
+  selector:
+    namespaces:
+      - open5gs
+    labelSelectors:
+      app.kubernetes.io/name: upf
+      app.kubernetes.io/instance: open5gs
+  direction: from          # drop packets leaving UPF toward SMF on N4
+  loss:
+    loss: "100"
+    correlation: "0"
+  target:
+    mode: all
+    selector:
+      namespaces:
+        - open5gs
+      labelSelectors:
+        app.kubernetes.io/name: smf
+        app.kubernetes.io/instance: open5gs
+  duration: "5m"
+---
+# Phase 2 of 2: black-hole N6 egress — severs UE↔DN data plane
+# externalTargets covers the DN subnet; adjust to match your data-network CIDR
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: pfcp-session-deletion-n6-loss
+  namespace: open5gs
+spec:
+  action: loss
+  mode: all
+  selector:
+    namespaces:
+      - open5gs
+    labelSelectors:
+      app.kubernetes.io/name: upf
+      app.kubernetes.io/instance: open5gs
+  direction: to
+  loss:
+    loss: "100"
+    correlation: "0"
+  externalTargets:
+    - "10.45.0.0/16"       # replace with your DN/internet-facing subnet
+  duration: "5m"

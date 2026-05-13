@@ -1,0 +1,49 @@
+# Fault class: Network Packet Duplication (PFCP Session Modification — DUPL/Amplification Attack)
+# Target: UPF — N6 egress interface toward Data Network
+# Expected propagation: Infrastructure -> Application (orchestration largely silent)
+#   Infrastructure: n6_tx_packets_total and n6_tx_bytes_total roughly double;
+#                   UPF NIC transmit queue depth increases; container_network_transmit_bytes_total
+#                   spikes — this is the primary infra-layer fingerprint of DUPL
+#   Orchestration:  no pod restart; HPA may react if UPF CPU rises (packet copying is CPU-bound
+#                   at high packet rates)
+#   Application:    DN hosts receive duplicate copies of every user-plane packet;
+#                   duplicate ACKs trigger TCP congestion control on UE sessions;
+#                   if externalTargets are outside the 5GC, UPF resources are progressively
+#                   exhausted as traffic volume per active UE is multiplied (per source);
+#                   N6 interface instability — jitter and reorder visible at the DN side
+# Key signals: container_network_transmit_packets_total{pod=~"upf.*"} ≈ 2× baseline,
+#              ue_session_throughput_bytes rising without new UE attach events,
+#              DN-side pcap shows duplicate IP IDs and seq numbers,
+#              upf_packet_forward_errors_total may rise as queues fill
+# Attack model: adversary sets DUPL flag in the Apply Action field of a PFCP Modification
+#               Request, instructing UPF to fork every session's packets to a second FAR;
+#               modelled directly via NetworkChaos duplicate action on N6 egress
+# Source: Amponis et al., "Threatening the 5G core via PFCP DoS attacks: the case of
+#         blocking UAV communications," EURASIP J. Wireless Comms & Networking, Dec 2022.
+#         https://doi.org/10.1186/s13638-022-02204-5
+#         ("PFCP Session Modification DoS Attack (DUPL)" — Section 4.4)
+#
+# Apply:  kubectl apply -f 07-pfcp-session-modification-dupl-upf.yaml
+# Remove: kubectl delete -f 07-pfcp-session-modification-dupl-upf.yaml
+---
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: pfcp-modification-dupl-n6
+  namespace: open5gs
+spec:
+  action: duplicate
+  mode: all
+  selector:
+    namespaces:
+      - open5gs
+    labelSelectors:
+      app.kubernetes.io/name: upf
+      app.kubernetes.io/instance: open5gs
+  direction: to            # duplicate packets on the N6 egress path (UPF → DN)
+  duplicate:
+    duplicate: "100"       # 100 % duplication rate — every packet forked, matching DUPL semantics
+    correlation: "25"      # low correlation keeps duplication spread across the session lifetime
+  externalTargets:
+    - "10.45.0.0/16"       # replace with your DN/internet-facing subnet
+  duration: "5m"
