@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# Usage: source lib/apply_strategy.sh && apply_log_strategy "denum"
+# Usage: source B-log-strategies/apply_strategy.sh && apply_log_strategy "denum"
+
+_APPLY_STRATEGY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 apply_log_strategy() {
     local strategy_name="$1"
-    local strategy_file="$LIB_DIR/reduction_strategies/${strategy_name}.yaml"
+    local strategy_file="$_APPLY_STRATEGY_DIR/reduction_strategies/${strategy_name}.yaml"
 
     if [[ ! -f "$strategy_file" ]]; then
         echo "[ERROR] Strategy file $strategy_file not found!"

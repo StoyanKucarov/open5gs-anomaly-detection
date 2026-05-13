@@ -7,7 +7,7 @@
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../../lib/common.sh"
-source "$SCRIPT_DIR/../../lib/apply_strategy.sh"
+source "$SCRIPT_DIR/../apply_strategy.sh"
 
 WINDOW_DURATION=600 
 UE_COUNT=50
