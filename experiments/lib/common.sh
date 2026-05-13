@@ -41,7 +41,7 @@ reset_experiment_state() {
     local ue_count="${2:-50}" 
     echo "[reset] Executing Sequential Cold Start: $strategy"
 
-    kkubectl exec -n monitoring svc/loki -- rm -rf /data/loki/chunks /data/loki/index /data/loki/boltdb-shipper-active /data/loki/compactor 2>/dev/null || true
+    kubectl exec -n monitoring svc/loki -- rm -rf /data/loki/chunks /data/loki/index /data/loki/boltdb-shipper-active /data/loki/compactor 2>/dev/null || true
     kubectl delete configmap -n monitoring loki-promtail-positions 2>/dev/null || true
 
     kubectl rollout restart -n monitoring statefulset/loki

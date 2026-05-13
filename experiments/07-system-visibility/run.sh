@@ -46,8 +46,6 @@ perform_visibility_analysis() {
 
     local response=$(curl -G -s "http://localhost:3100/loki/api/v1/query_range" \
     --data-urlencode "query=$query" \
-    # --data-urlencode "start=$start_ns" \
-    # --data-urlencode "end=$end_ns" \
     --data-urlencode "since=4h" \
     --data-urlencode "limit=10000")
 
