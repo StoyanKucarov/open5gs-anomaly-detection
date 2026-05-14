@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 03-fault-detection/run_all.sh
+# C-fault-detection/run_all.sh
 #
 # Phase 3: Fault detection — runs all 22 faults in sequence.
 #
@@ -36,7 +36,7 @@ POST_DURATION="${POST_DURATION:-120}"
 RESET_BETWEEN_FAULTS="${RESET_BETWEEN_FAULTS:-1}"
 
 UE_COUNT="${UE_COUNT:-50}"
-OUT_BASE="$DATA_DIR/03-fault-detection"
+OUT_BASE="$DATA_DIR/C-fault-detection"
 
 echo "============================================================"
 echo " Phase 3: Fault detection (22 faults)"
