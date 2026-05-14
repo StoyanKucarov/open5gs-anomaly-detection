@@ -21,7 +21,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../lib/common.sh"
 source "$SCRIPT_DIR/../lib/reset_workload.sh"
 
-FROM=1
+FROM=10                      # changed: default start point is now fault 17
 if [[ "${1:-}" == "--from" && -n "${2:-}" ]]; then
     FROM="$2"
 fi
@@ -40,6 +40,7 @@ OUT_BASE="$DATA_DIR/03-fault-detection"
 
 echo "============================================================"
 echo " Phase 3: Fault detection (10 faults)"
+echo " starting from fault: $FROM"
 echo " durations: pre=${PRE_DURATION}s fault=${FAULT_DURATION}s post=${POST_DURATION}s"
 echo "============================================================"
 
