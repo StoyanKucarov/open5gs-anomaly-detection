@@ -22,7 +22,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../lib/common.sh"
 source "$SCRIPT_DIR/../lib/reset_workload.sh"
 
-=======
 FROM=1
 ONLY=""
 while [[ $# -gt 0 ]]; do
@@ -46,7 +45,6 @@ UE_COUNT="${UE_COUNT:-50}"
 OUT_BASE="$DATA_DIR/C-fault-detection"
 
 echo "============================================================"
-=======
 echo " Phase 3: Fault detection (22 faults)"
 echo " durations: pre=${PRE_DURATION}s  fault=${FAULT_DURATION}s  post=${POST_DURATION}s"
 echo "============================================================"
