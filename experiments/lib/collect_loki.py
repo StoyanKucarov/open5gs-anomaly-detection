@@ -23,8 +23,6 @@ from pathlib import Path
 
 # (output_filename, LogQL query)
 LOKI_QUERIES = [
-    ("all.csv",
-     '{namespace="open5gs"}'),
     ("errors.csv",
      '{namespace="open5gs"} |~ "(?i)(error|exception|refused|failed|fatal|oom|killed)"'),
     ("nrf_lifecycle.csv",
