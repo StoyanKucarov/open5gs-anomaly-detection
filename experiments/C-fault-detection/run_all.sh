@@ -14,7 +14,8 @@
 #   PRE_DURATION=600 FAULT_DURATION=300 POST_DURATION=300 bash run_all.sh
 #
 # Usage:
-#   bash run_all.sh [--from N]   # skip faults 1..N-1
+#   bash run_all.sh [--from N]          # skip faults 1..N-1
+#   bash run_all.sh --only 19,20        # run only the listed fault numbers
 
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -22,9 +23,14 @@ source "$SCRIPT_DIR/../lib/common.sh"
 source "$SCRIPT_DIR/../lib/reset_workload.sh"
 
 FROM=1
-if [[ "${1:-}" == "--from" && -n "${2:-}" ]]; then
-    FROM="$2"
-fi
+ONLY=""
+while [[ $# -gt 0 ]]; do
+    case "${1:-}" in
+        --from) FROM="$2"; shift 2 ;;
+        --only) ONLY="$2"; shift 2 ;;
+        *) shift ;;
+    esac
+done
 
 PRE_DURATION="${PRE_DURATION:-120}"
 FAULT_DURATION="${FAULT_DURATION:-300}"
@@ -56,7 +62,11 @@ ensure_portforward_loki
 
 run_fault_experiment() {
     local num="$1" name="$2" manifest="$3"
-    if [[ $num -lt $FROM ]]; then
+    if [[ -n "$ONLY" ]] && ! echo ",$ONLY," | grep -q ",$num,"; then
+        echo "[skip] Fault $num ($name)"
+        return
+    fi
+    if [[ -z "$ONLY" && $num -lt $FROM ]]; then
         echo "[skip] Fault $num ($name)"
         return
     fi

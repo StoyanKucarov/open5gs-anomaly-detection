@@ -78,6 +78,60 @@ STANDARD_METRICS = [
      'rate(container_cpu_usage_seconds_total{namespace="open5gs",pod=~"beyla.*",container!=""}[2m])'),
     ("beyla_memory_working_set.csv",
      'container_memory_working_set_bytes{namespace="open5gs",pod=~"beyla.*",container!=""}'),
+    # --- Open5GS native application metrics ---
+    # AMF: registration and authentication counters
+    ("open5gs_amf_registered_subscribers.csv",
+     'fivegs_amffunction_rm_registeredsubnbr'),
+    ("open5gs_amf_reg_init_req.csv",
+     'rate(fivegs_amffunction_rm_reginitreq[2m])'),
+    ("open5gs_amf_reg_init_succ.csv",
+     'rate(fivegs_amffunction_rm_reginitsucc[2m])'),
+    ("open5gs_amf_auth_fail.csv",
+     'rate(fivegs_amffunction_amf_authfail[2m])'),
+    ("open5gs_amf_auth_reject.csv",
+     'rate(fivegs_amffunction_amf_authreject[2m])'),
+    ("open5gs_amf_paging_req.csv",
+     'rate(fivegs_amffunction_mm_paging5greq[2m])'),
+    ("open5gs_amf_sessions.csv",
+     'amf_session'),
+    # SMF: PDU session and PFCP (N4) metrics
+    ("open5gs_smf_session_nbr.csv",
+     'fivegs_smffunction_sm_sessionnbr'),
+    ("open5gs_smf_pdu_session_req.csv",
+     'rate(fivegs_smffunction_sm_pdusessioncreationreq[2m])'),
+    ("open5gs_smf_pdu_session_succ.csv",
+     'rate(fivegs_smffunction_sm_pdusessioncreationsucc[2m])'),
+    ("open5gs_smf_n4_session_estab.csv",
+     'rate(fivegs_smffunction_sm_n4sessionestabreq[2m])'),
+    # UPF: PFCP sessions and GTP data plane
+    ("open5gs_upf_session_nbr.csv",
+     'fivegs_upffunction_upf_sessionnbr'),
+    ("open5gs_upf_n4_session_estab.csv",
+     'rate(fivegs_upffunction_sm_n4sessionestabreq[2m])'),
+    ("open5gs_pfcp_sessions_active.csv",
+     'pfcp_sessions_active'),
+    ("open5gs_pfcp_peers_active.csv",
+     'pfcp_peers_active'),
+    ("open5gs_gtp_in_packets.csv",
+     'rate(fivegs_ep_n3_gtp_indatapktn3upf[2m])'),
+    ("open5gs_gtp_out_packets.csv",
+     'rate(fivegs_ep_n3_gtp_outdatapktn3upf[2m])'),
+    # SMF: N4 session report success rate (gap = PFCP health)
+    ("open5gs_smf_n4_session_report.csv",
+     'rate(fivegs_smffunction_sm_n4sessionreport[2m])'),
+    ("open5gs_smf_n4_session_report_succ.csv",
+     'rate(fivegs_smffunction_sm_n4sessionreportsucc[2m])'),
+    # AMF: gNB count and RAN UE count (drop = N2 interface fault)
+    ("open5gs_amf_gnb_count.csv",
+     'gnb'),
+    ("open5gs_amf_ran_ue_count.csv",
+     'ran_ue'),
+    # UPF: QoS flow count (complement to session count)
+    ("open5gs_upf_qos_flows.csv",
+     'fivegs_upffunction_upf_qosflows'),
+    # GTP: node failure counter
+    ("open5gs_gtp_node_failed.csv",
+     'rate(gtp_new_node_failed[2m])'),
 ]
 
 
