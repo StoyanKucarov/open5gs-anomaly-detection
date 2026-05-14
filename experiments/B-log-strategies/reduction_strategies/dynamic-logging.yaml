@@ -1,0 +1,10 @@
+promtail:
+  config:
+    snippets:
+      pipelineStages:
+        - docker: {}
+        - regex:
+            expression: 'level=(?P<lvl>[A-Z]+)'
+        - drop:
+            source: "lvl"
+            expression: '(DEBUG|INFO|TRACE|NOTICE)'

@@ -44,7 +44,7 @@ reproduce/experiments/lib/
     │                                post_delete:  rollout restart SMF
     ├── 03-pod-crash-amf.sh          post_delete:  rollout restart gNB + UEs
     ├── 04-network-delay-gnb-amf.sh  during_fault: AMF→SCP ping, RTT to file
-    ├── 05-network-partition-amf-nrf.sh during_fault: AMF→SCP ping, capture
+    ├── 05-network-partition-amf-scp.sh during_fault: AMF→SCP ping, capture
     │                                                 packet-loss %
     ├── 06-dependency-failure-nrf.sh post_delete:  sleep 30 for NF re-reg
     ├── 07-pod-crash-smf.sh          post_delete:  rollout restart SMF
@@ -195,7 +195,7 @@ reproduce/data/experiments/03-fault-detection/<slug>/
         nrf_registrations.json      live NF-instance counts via NRF /nf-instances
 ```
 
-For `04-network-delay-gnb-amf`, `05-network-partition-amf-nrf`,
+For `04-network-delay-gnb-amf`, `05-network-partition-amf-scp`,
 `08-network-delay-nrf`, the hook also writes:
 
 ```

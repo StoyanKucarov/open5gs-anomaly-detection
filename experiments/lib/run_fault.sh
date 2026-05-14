@@ -109,8 +109,12 @@ collect_phase() {
 # ---------------------------------------------------------------------------
 echo "[fault] PRE window (${PRE_DURATION}s)..."
 PRE_START=$(now_ts)
+mkdir -p "$OUT_DIR/rtt/pre"
+bash "$LIB_DIR/collect_ue_rtt.sh" "$PRE_DURATION" "$OUT_DIR/rtt/pre/ue_rtt.csv" &
+PRE_RTT_PID=$!
 sleep_with_progress "$PRE_DURATION" "pre-fault baseline"
 PRE_END=$(now_ts)
+wait "$PRE_RTT_PID" 2>/dev/null || true
 collect_phase pre "$PRE_START" "$PRE_END"
 
 # ---------------------------------------------------------------------------
@@ -126,8 +130,15 @@ FAULT_START=$(now_ts)
 echo "[fault] during_fault hook (background)..."
 during_fault
 
+# Start UE-side RTT collection in background for the fault window
+UE_RTT_FILE="$OUT_DIR/rtt/during/ue_rtt.csv"
+mkdir -p "$OUT_DIR/rtt/during"
+bash "$LIB_DIR/collect_ue_rtt.sh" "$FAULT_DURATION" "$UE_RTT_FILE" &
+UE_RTT_PID=$!
+
 sleep_with_progress "$FAULT_DURATION" "fault active"
 FAULT_END=$(now_ts)
+wait "$UE_RTT_PID" 2>/dev/null || true
 collect_phase during "$FAULT_START" "$FAULT_END"
 
 # ---------------------------------------------------------------------------
@@ -157,8 +168,12 @@ post_delete
 # POST window
 # ---------------------------------------------------------------------------
 echo "[fault] POST window (${POST_DURATION}s)..."
+mkdir -p "$OUT_DIR/rtt/post"
+bash "$LIB_DIR/collect_ue_rtt.sh" "$POST_DURATION" "$OUT_DIR/rtt/post/ue_rtt.csv" &
+POST_RTT_PID=$!
 sleep_with_progress "$POST_DURATION" "post-fault recovery"
 POST_END=$(now_ts)
+wait "$POST_RTT_PID" 2>/dev/null || true
 collect_phase post "$REMOVE_TS" "$POST_END"
 
 # ---------------------------------------------------------------------------

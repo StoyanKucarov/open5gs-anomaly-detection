@@ -52,6 +52,10 @@ spec:
     metadata:
       labels:
         app: beyla
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/metrics"
     spec:
       serviceAccountName: beyla
       hostPID: true
@@ -71,9 +75,12 @@ spec:
         # Export traces via OTLP gRPC to Jaeger
         - name: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
           value: "http://jaeger.monitoring.svc.cluster.local:4317"
-        # Export metrics too
+        # Expose Prometheus metrics endpoint on port 9090
+        - name: BEYLA_PROMETHEUS_PORT
+          value: "9090"
+        # Disable OTLP metrics export (was going to Jaeger which drops them)
         - name: OTEL_EXPORTER_OTLP_METRICS_ENDPOINT
-          value: "http://jaeger.monitoring.svc.cluster.local:4317"
+          value: ""
         # Use Kubernetes pod name/namespace as service name
         - name: OTEL_EBPF_KUBE_METADATA_ENABLE
           value: "autodetect"
@@ -87,6 +94,10 @@ spec:
           value: "DEBUG"
         - name: BEYLA_LOG_LEVEL
           value: "DEBUG"
+        ports:
+        - name: metrics
+          containerPort: 9090
+          protocol: TCP
         securityContext:
           privileged: true
           runAsUser: 0
@@ -115,3 +126,23 @@ spec:
       - name: sys-fs-cgroup
         hostPath:
           path: /sys/fs/cgroup
+---
+# PodMonitor — tells Prometheus to scrape Beyla's metrics endpoint on each node
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: beyla
+  namespace: monitoring
+  labels:
+    release: kube-prom
+spec:
+  namespaceSelector:
+    matchNames:
+      - open5gs
+  selector:
+    matchLabels:
+      app: beyla
+  podMetricsEndpoints:
+  - port: metrics
+    path: /metrics
+    interval: 5s

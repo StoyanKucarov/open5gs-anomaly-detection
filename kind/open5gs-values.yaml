@@ -31,6 +31,13 @@ mongodb:
     enabled: false
 
 amf:
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+      additionalLabels:
+        release: kube-prom
+      interval: 5s
   config:
     guamiList:
       - amf_id:
@@ -61,6 +68,13 @@ amf:
       cpu: "500m"
 
 smf:
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+      additionalLabels:
+        release: kube-prom
+      interval: 5s
   config:
     pcrf:
       enabled: false
@@ -73,6 +87,13 @@ smf:
       cpu: "500m"
 
 upf:
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+      additionalLabels:
+        release: kube-prom
+      interval: 5s
   resources:
     requests:
       memory: "32Mi"

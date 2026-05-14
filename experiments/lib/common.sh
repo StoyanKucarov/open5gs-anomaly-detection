@@ -27,12 +27,66 @@ LOKI_URL="${LOKI_URL:-http://127.0.0.1:3100}"
 # Cleanup on exit
 # ---------------------------------------------------------------------------
 _cleanup() {
-    for pid in "${_PF_PIDS[@]:-}"; do
+    [[ ${#_PF_PIDS[@]} -eq 0 ]] && return
+    for pid in "${_PF_PIDS[@]}"; do
         kill "$pid" 2>/dev/null || true
     done
 }
 trap _cleanup EXIT
 
+# ---------------------------------------------------------------------------
+# Experiment Reset
+# ---------------------------------------------------------------------------
+reset_experiment_state() {
+    local strategy="${1:-unknown}"
+    local ue_count="${2:-50}" 
+    echo "[reset] Executing Sequential Cold Start: $strategy"
+
+    kubectl exec -n monitoring svc/loki -- rm -rf /data/loki/chunks /data/loki/index /data/loki/boltdb-shipper-active /data/loki/compactor 2>/dev/null || true
+    kubectl delete configmap -n monitoring loki-promtail-positions 2>/dev/null || true
+
+    kubectl rollout restart -n monitoring statefulset/loki
+    
+    echo "  [reset] Waiting for Loki Rollout (180s)..."
+    kubectl rollout status -n monitoring statefulset/loki --timeout=180s >/dev/null
+
+    echo -n "  [reset] Waiting for Loki Pod readiness..."
+    if kubectl wait --for=condition=ready pod/loki-0 -n monitoring --timeout=90s >/dev/null 2>&1; then
+        echo " ready."
+    else
+        # Fallback: if name wait fails, try the label again with a broader scope
+        echo -n " (using fallback selector)..."
+        kubectl wait --for=condition=ready pod -n monitoring -l "app.kubernetes.io/instance=loki" --timeout=60s >/dev/null 2>&1 || \
+        kubectl wait --for=condition=ready pod -n monitoring -l "app=loki" --timeout=60s >/dev/null 2>&1
+        echo " ready."
+    fi
+
+    kubectl rollout restart daemonset -n monitoring loki-promtail
+
+    echo "  [reset] Tier 1: Forced Restart of MongoDB and NRF..."
+    local mongo_label="app.kubernetes.io/name=mongodb"
+    kubectl delete pod -n open5gs -l "$mongo_label" --force --grace-period=0 2>/dev/null || true
+    kubectl rollout restart deployment -n open5gs open5gs-nrf
+    
+    echo -n "  [reset] Waiting for MongoDB readiness..."
+    kubectl wait --for=condition=ready pod -n open5gs -l "$mongo_label" --timeout=120s >/dev/null 2>&1
+    echo " ready."
+
+    echo "  [reset] Provisioning $ue_count subscribers..."
+    kubectl scale deployment open5gs-populate -n open5gs --replicas=0 2>/dev/null || true
+    kubectl delete pod -n open5gs -l app=open5gs-populate --force --grace-period=0 2>/dev/null || true
+    
+    bash "$LIB_DIR/provision_ues.sh" "$ue_count"
+
+    echo "  [reset] Tier 2: Restarting remaining Network Functions..."
+    kubectl get deployments -n open5gs -o name | grep -vE 'mongodb|nrf|populate' | xargs -r kubectl rollout restart -n open5gs
+
+    echo -n "  [reset] Waiting for final stability..."
+    wait_for_pods_stable open5gs 300
+    
+    sleep 20
+    echo " done."
+}
 # ---------------------------------------------------------------------------
 # Port-forward helpers
 # ---------------------------------------------------------------------------
@@ -125,12 +179,13 @@ sleep_with_progress() {
 
 check_cluster_ready() {
     echo "[check] Verifying cluster context..."
-    kubectl cluster-info --context kind-open5gs >/dev/null 2>&1 || {
-        echo "[ERROR] Cluster kind-open5gs not reachable" >&2
+    local ctx
+    ctx=$(kubectl config current-context 2>/dev/null || true)
+    kubectl cluster-info --context "$ctx" >/dev/null 2>&1 || {
+        echo "[ERROR] Cluster $ctx not reachable" >&2
         exit 1
     }
-    kubectl config use-context kind-open5gs >/dev/null 2>&1
-    echo "[check] Cluster ready"
+    echo "[check] Cluster ready (context: $ctx)"
 }
 
 # ---------------------------------------------------------------------------
@@ -145,7 +200,8 @@ wait_for_pods_stable() {
     while true; do
         local not_ready
         not_ready=$(kubectl get pods -n "$ns" --no-headers 2>/dev/null \
-            | { grep -v -E "Running|Completed|Succeeded" || true; } | wc -l)
+            | { grep -v -E "Running|Completed|Succeeded" || true; } \
+            | { grep -v "open5gs-populate" || true; } | wc -l)
         if [[ "$not_ready" -eq 0 ]]; then
             echo " stable"
             return 0

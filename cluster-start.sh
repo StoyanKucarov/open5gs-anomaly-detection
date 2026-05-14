@@ -90,7 +90,8 @@ else
     --namespace monitoring \
     --set promtail.enabled=true \
     --set loki.persistence.enabled=false \
-    --set grafana.enabled=false
+    --set grafana.enabled=false \
+    --set loki.isDefault=false
 
   helm install jaeger jaegertracing/jaeger \
     --namespace monitoring \
@@ -112,7 +113,14 @@ else
     --set chaosDaemon.socketPath=/run/containerd/containerd.sock
 
   echo "  -> Waiting for Chaos Mesh to be ready..."
-  kubectl rollout status deployment/chaos-controller-manager -n chaos-mesh --timeout=3m
+  kubectl rollout status deployment/chaos-controller-manager -n chaos-mesh --timeout=7m
+  
+  # ── Metrics Server (Required for kubectl top) ──────────────────────────────
+  echo "  [4e] Metrics Server..."
+  kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+  kubectl patch -n kube-system deployment metrics-server --type=json \
+    -p '[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-insecure-tls"}]'
+
 fi
 
 # --- 5. Sanity checks ---------------------------------------------------------
