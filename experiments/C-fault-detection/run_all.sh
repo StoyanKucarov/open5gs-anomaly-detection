@@ -22,11 +22,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../lib/common.sh"
 source "$SCRIPT_DIR/../lib/reset_workload.sh"
 
-<<<<<<< HEAD:experiments/03-fault-detection/run_all.sh
-FROM=10                      # changed: default start point is now fault 17
-if [[ "${1:-}" == "--from" && -n "${2:-}" ]]; then
-    FROM="$2"
-fi
 =======
 FROM=1
 ONLY=""
@@ -37,7 +32,6 @@ while [[ $# -gt 0 ]]; do
         *) shift ;;
     esac
 done
->>>>>>> e0e585fbf47e7da72ff553cbc12229dcbb02c989:experiments/C-fault-detection/run_all.sh
 
 PRE_DURATION="${PRE_DURATION:-120}"
 FAULT_DURATION="${FAULT_DURATION:-300}"
@@ -52,10 +46,6 @@ UE_COUNT="${UE_COUNT:-50}"
 OUT_BASE="$DATA_DIR/C-fault-detection"
 
 echo "============================================================"
-<<<<<<< HEAD:experiments/03-fault-detection/run_all.sh
-echo " Phase 3: Fault detection (10 faults)"
-echo " starting from fault: $FROM"
-echo " durations: pre=${PRE_DURATION}s fault=${FAULT_DURATION}s post=${POST_DURATION}s"
 =======
 echo " Phase 3: Fault detection (22 faults)"
 echo " durations: pre=${PRE_DURATION}s  fault=${FAULT_DURATION}s  post=${POST_DURATION}s"
