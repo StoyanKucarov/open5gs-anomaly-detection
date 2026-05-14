@@ -30,7 +30,7 @@ spec:
     labelSelectors:
       app.kubernetes.io/name: scp
       app.kubernetes.io/instance: open5gs
-  direction: both
+  direction: to
   delay:
     latency: "500ms"
     jitter: "20ms"
