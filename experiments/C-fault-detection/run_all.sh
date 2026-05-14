@@ -59,7 +59,6 @@ echo " durations: pre=${PRE_DURATION}s fault=${FAULT_DURATION}s post=${POST_DURA
 =======
 echo " Phase 3: Fault detection (22 faults)"
 echo " durations: pre=${PRE_DURATION}s  fault=${FAULT_DURATION}s  post=${POST_DURATION}s"
->>>>>>> e0e585fbf47e7da72ff553cbc12229dcbb02c989:experiments/C-fault-detection/run_all.sh
 echo "============================================================"
 
 check_cluster_ready
