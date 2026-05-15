@@ -33,7 +33,7 @@ LOKI_QUERIES = [
      '{namespace="open5gs"} |~ "(?i)(Connection timer expired|Connection refused|Failed to connect|response_handler.*failed)"'),
 ]
 
-LIMIT = 5000  # max lines per query (matches Boyan's main pipeline)
+LIMIT = 50000  # max lines per query
 
 
 def query_range(url: str, query: str, start_ns: int, end_ns: int) -> dict:

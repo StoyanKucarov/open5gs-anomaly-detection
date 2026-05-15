@@ -21,13 +21,25 @@ OUT_FILE="${2:-/tmp/ue_rtt.csv}"
 UPF_GW="10.45.0.1"
 IFACE="uesimtun0"
 
-# Find the gnb-ues pod (has the uesimtun interfaces)
-UE_POD=$(kubectl get pods -n open5gs \
-    -l app.kubernetes.io/instance=ueransim-gnb,app.kubernetes.io/component=ues \
-    --no-headers 2>/dev/null | head -1 | awk '{print $1}')
+# Find a UE pod that has uesimtun0 active
+_find_ue_pod_with_tunnel() {
+    for pod in $(kubectl get pods -n open5gs \
+            -l app.kubernetes.io/instance=ueransim-gnb,app.kubernetes.io/component=ues \
+            --no-headers 2>/dev/null | awk '{print $1}'); do
+        kubectl exec -n open5gs "$pod" -- ip link show uesimtun0 >/dev/null 2>&1 && echo "$pod" && return 0
+    done
+    for pod in $(kubectl get pods -n open5gs \
+            -l app.kubernetes.io/component=ues \
+            --no-headers 2>/dev/null | awk '{print $1}'); do
+        kubectl exec -n open5gs "$pod" -- ip link show uesimtun0 >/dev/null 2>&1 && echo "$pod" && return 0
+    done
+    return 1
+}
+
+UE_POD=$(_find_ue_pod_with_tunnel || true)
 
 if [[ -z "$UE_POD" ]]; then
-    echo "  [ue_rtt] WARNING: no gnb-ues pod found, skipping UE RTT collection" >&2
+    echo "  [ue_rtt] WARNING: no UE pod with uesimtun0 found, skipping UE RTT collection" >&2
     echo "timestamp_ms,rtt_ms,status" > "$OUT_FILE"
     exit 0
 fi

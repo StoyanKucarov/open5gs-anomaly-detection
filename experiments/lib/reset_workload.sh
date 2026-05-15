@@ -1,76 +1,82 @@
 #!/usr/bin/env bash
 # experiments/lib/reset_workload.sh
 #
-# Soft-reset the open5gs workload: tear down Open5GS + UERANSIM (uninstalls
-# their Helm releases — also drops MongoDB and all subscribers), then
-# reinstall fresh, reprovision subscribers, scale UEs. Leaves kind itself,
-# monitoring (Prom/Loki/Jaeger/Beyla), and Chaos Mesh untouched.
+# Soft-reset the open5gs workload between fault experiments.
+# Restarts pods in dependency order to clear stale state (PFCP sessions,
+# NF registrations, UE tunnels) without helm uninstall/reinstall.
+# This avoids pod-IP churn that caused SCP→AUSF routing failures.
+# MongoDB PVC is kept so subscriber provisioning is preserved.
 #
-# Use to wipe per-fault drift (stale PFCP sessions, ghost NF registrations,
-# UE TUN interfaces in weird states) without paying the ~15 min cost of a
-# full cluster recreate. Costs ~2-3 min per call.
+# Costs ~60-90s per call (vs ~3min for the old helm approach).
 #
 # Caller is expected to source common.sh first so $LIB_DIR is set.
 #
 # Usage:
-#   reset_workload <ue_count>      # e.g. reset_workload 50
+#   reset_workload      # UE count is fixed at 10 (set in helm upgrade)
 
 reset_workload() {
-    local ue_count="${1:-50}"
-    local repo_root
-    repo_root="$(cd "$LIB_DIR/../.." && pwd)"
-    local values="$repo_root/kind/open5gs-values.yaml"
+    # 1. NRF first — all NFs register against a fresh NRF so SCP gets
+    # current pod IPs, not stale ones from a previous run.
+    echo "[reset] restarting NRF..."
+    kubectl rollout restart deployment/open5gs-nrf -n open5gs
+    kubectl rollout status  deployment/open5gs-nrf -n open5gs --timeout=60s
 
-    echo "[reset] tearing down workload..."
-    helm uninstall ueransim-ues -n open5gs --ignore-not-found 2>/dev/null || true
-    helm uninstall ueransim-gnb -n open5gs --ignore-not-found 2>/dev/null || true
-    helm uninstall open5gs      -n open5gs --ignore-not-found 2>/dev/null || true
-
-    # Force-delete the PVC so MongoDB starts from an empty volume.
-    kubectl delete pvc -n open5gs -l app.kubernetes.io/name=mongodb \
-        --ignore-not-found --wait=true 2>/dev/null || true
-
-    # Wait for pods to fully drain (helm uninstall returns before pods are gone).
-    local i=0
-    while kubectl get pods -n open5gs --no-headers 2>/dev/null \
-            | grep -qE 'open5gs-|ueransim-'; do
-        sleep 3
-        i=$((i + 3))
-        [[ $i -ge 120 ]] && { echo "[reset] WARN: pods still terminating after 120s, continuing"; break; }
+    # 2. All other NFs in parallel — they re-register with the fresh NRF.
+    echo "[reset] restarting NFs..."
+    kubectl rollout restart \
+        deployment/open5gs-scp \
+        deployment/open5gs-ausf \
+        deployment/open5gs-udm \
+        deployment/open5gs-udr \
+        deployment/open5gs-amf \
+        deployment/open5gs-smf \
+        deployment/open5gs-upf \
+        deployment/open5gs-pcf \
+        deployment/open5gs-bsf \
+        deployment/open5gs-nssf \
+        -n open5gs
+    for dep in scp ausf udm udr amf smf upf pcf bsf nssf; do
+        kubectl rollout status deployment/open5gs-$dep -n open5gs --timeout=90s
     done
 
-    echo "[reset] reinstalling Open5GS..."
-    helm install open5gs oci://registry-1.docker.io/gradiantcharts/open5gs \
-        --version 2.3.4 --namespace open5gs \
-        -f "$values" \
-        --wait --timeout=10m
-    kubectl delete deployment -n open5gs open5gs-webui --ignore-not-found
+    # 3. Wait for NFs to fully register with NRF before touching gNB/UEs.
+    # UERANSIM gNB does not auto-reconnect after SCTP drop, so it must start
+    # only after AMF is fully up and accepting connections.
+    echo "[reset] waiting for NF mesh to stabilise..."
+    sleep 30
 
-    echo "[reset] reinstalling UERANSIM..."
-    helm install ueransim-gnb oci://registry-1.docker.io/gradiant/ueransim-gnb \
-        --version 0.2.6 --namespace open5gs \
-        --values https://gradiant.github.io/5g-charts/docs/open5gs-ueransim-gnb/gnb-ues-values.yaml \
-        --wait --timeout=5m
-    helm install ueransim-ues oci://registry-1.docker.io/gradiant/ueransim-ues \
-        --version 0.1.2 --namespace open5gs \
-        --values https://gradiant.github.io/5g-charts/docs/open5gs-ueransim-gnb/gnb-ues-values.yaml \
-        --set ues.count="$ue_count" \
-        --wait --timeout=5m
+    # 4. gNB — reconnects to AMF with a fresh NGAP association.
+    echo "[reset] restarting gNB..."
+    kubectl rollout restart deployment/ueransim-gnb -n open5gs
+    kubectl rollout status  deployment/ueransim-gnb -n open5gs --timeout=60s
+    sleep 5
 
-    echo "[reset] reprovisioning $ue_count subscribers..."
-    bash "$LIB_DIR/provision_ues.sh" "$ue_count"
+    # 5. UE pods — fresh registration + PDU session establishment.
+    echo "[reset] restarting UEs..."
+    kubectl rollout restart \
+        deployment/ueransim-gnb-ues \
+        deployment/ueransim-ues \
+        -n open5gs
+    kubectl rollout status deployment/ueransim-gnb-ues -n open5gs --timeout=60s
+    kubectl rollout status deployment/ueransim-ues     -n open5gs --timeout=60s
 
-    wait_for_pods_stable open5gs 120
+    # 6. Wait for uesimtun0 to appear (PDU session established).
+    echo "[reset] waiting for UE PDU sessions..."
+    local ue_pod i=0
+    ue_pod=$(kubectl get pods -n open5gs -l app.kubernetes.io/component=ues \
+        -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+    while ! kubectl exec -n open5gs "$ue_pod" -- \
+            ip link show uesimtun0 >/dev/null 2>&1; do
+        sleep 3
+        i=$((i + 3))
+        if [[ $i -ge 90 ]]; then
+            echo "[reset] WARN: uesimtun0 not up after 90s — UEs may need more time"
+            break
+        fi
+    done
 
-    # SMF/UPF startup race: SMF often loses initial PFCP heartbeat and
-    # re-associates, leaving any PDU sessions from UEs that registered
-    # in between in a stale state (data plane dead). Restart SMF then
-    # UEs so PDU sessions are established against the stable PFCP.
-    echo "[reset] settling PFCP + UE PDU sessions..."
-    kubectl rollout restart deployment/open5gs-smf -n open5gs
-    kubectl rollout status  deployment/open5gs-smf -n open5gs --timeout=60s
-    kubectl rollout restart deployment/ueransim-ues -n open5gs
-    kubectl rollout status  deployment/ueransim-ues -n open5gs --timeout=60s
-    sleep 10
-    echo "[reset] workload ready"
+    local tun_count
+    tun_count=$(kubectl exec -n open5gs "$ue_pod" -- \
+        ip link show 2>/dev/null | grep -c uesimtun || true)
+    echo "[reset] workload ready — ${tun_count}/10 UE tunnels up"
 }

@@ -50,29 +50,10 @@ if $SKIP_DEPLOY; then
 else
   echo "[4/5] Deploying full stack..."
 
-  # ── Open5GS ────────────────────────────────────────────────────────────────
-  echo "  [4a] Open5GS..."
-  kubectl create namespace open5gs --dry-run=client -o yaml | kubectl apply -f -
-  helm install open5gs oci://registry-1.docker.io/gradiantcharts/open5gs \
-    --version 2.3.4 \
-    --namespace open5gs \
-    -f "$SCRIPT_DIR/kind/open5gs-values.yaml" \
-    --wait --timeout=10m
-  kubectl delete deployment -n open5gs open5gs-webui --ignore-not-found
-
-  # ── UERANSIM ───────────────────────────────────────────────────────────────
-  echo "  [4b] UERANSIM gNB + UEs..."
-  helm install ueransim-gnb oci://registry-1.docker.io/gradiant/ueransim-gnb \
-    --version 0.2.6 --namespace open5gs \
-    --values https://gradiant.github.io/5g-charts/docs/open5gs-ueransim-gnb/gnb-ues-values.yaml \
-    --wait --timeout=5m
-  helm install ueransim-ues oci://registry-1.docker.io/gradiant/ueransim-ues \
-    --version 0.1.2 --namespace open5gs \
-    --values https://gradiant.github.io/5g-charts/docs/open5gs-ueransim-gnb/gnb-ues-values.yaml \
-    --wait --timeout=5m
-
   # ── Observability ──────────────────────────────────────────────────────────
-  echo "  [4c] Observability stack..."
+  # Must come before Open5GS — Open5GS references ServiceMonitor CRDs which
+  # are installed by kube-prometheus-stack.
+  echo "  [4a] Observability stack..."
   helm repo add prometheus-community https://prometheus-community.github.io/helm-charts 2>/dev/null || true
   helm repo add grafana               https://grafana.github.io/helm-charts             2>/dev/null || true
   helm repo add jaegertracing         https://jaegertracing.github.io/helm-charts       2>/dev/null || true
@@ -85,6 +66,33 @@ else
     --set grafana.adminPassword=admin \
     --set prometheus.prometheusSpec.scrapeInterval=5s \
     --timeout=10m
+
+  # ── Open5GS ────────────────────────────────────────────────────────────────
+  echo "  [4b] Open5GS..."
+  kubectl create namespace open5gs --dry-run=client -o yaml | kubectl apply -f -
+  helm install open5gs oci://registry-1.docker.io/gradiantcharts/open5gs \
+    --version 2.3.4 \
+    --namespace open5gs \
+    -f "$SCRIPT_DIR/kind/open5gs-values.yaml" \
+    --wait --timeout=10m
+  kubectl delete deployment -n open5gs open5gs-webui --ignore-not-found
+
+  # ── UERANSIM ───────────────────────────────────────────────────────────────
+  echo "  [4c] UERANSIM gNB + UEs..."
+  helm install ueransim-gnb oci://registry-1.docker.io/gradiant/ueransim-gnb \
+    --version 0.2.6 --namespace open5gs \
+    --values https://gradiant.github.io/5g-charts/docs/open5gs-ueransim-gnb/gnb-ues-values.yaml \
+    --set ues.count=10 \
+    --wait --timeout=5m
+  helm install ueransim-ues oci://registry-1.docker.io/gradiant/ueransim-ues \
+    --version 0.1.2 --namespace open5gs \
+    --values https://gradiant.github.io/5g-charts/docs/open5gs-ueransim-gnb/gnb-ues-values.yaml \
+    --wait --timeout=5m
+
+  echo "  [4d] Provisioning subscribers..."
+  bash "$SCRIPT_DIR/experiments/lib/provision_ues.sh" 10
+  kubectl rollout restart deployment/ueransim-gnb-ues -n open5gs
+  kubectl rollout status  deployment/ueransim-gnb-ues -n open5gs --timeout=60s
 
   helm install loki grafana/loki-stack \
     --namespace monitoring \
