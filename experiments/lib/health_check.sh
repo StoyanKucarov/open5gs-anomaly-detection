@@ -9,7 +9,7 @@
 #   label    - e.g. "pre-fault-01" or "post-fault-01"
 #   out_file - optional JSON output path
 
-set -euo pipefail
+set +e  # diagnostic script — don't abort on individual check failures
 
 LABEL="${1:-check}"
 OUT_FILE="${2:-}"
@@ -25,7 +25,7 @@ CRITICAL_NFS=(amf smf upf nrf)
 # ── 1. Pod health ──────────────────────────────────────────────────────────
 TOTAL=$(kubectl get pods -n open5gs --no-headers 2>/dev/null | wc -l)
 NOT_RUNNING=$(kubectl get pods -n open5gs --no-headers 2>/dev/null \
-    | grep -v " Running " | wc -l)
+    | { grep -v " Running " || true; } | wc -l)
 RESTARTS=$(kubectl get pods -n open5gs --no-headers 2>/dev/null \
     | awk '{sum+=$4} END{print sum+0}')
 
@@ -42,14 +42,13 @@ elif [[ "$NOT_RUNNING" -eq 0 ]]; then
     echo "  [pods]  OK — ${TOTAL} pods running, total restarts=${RESTARTS}"
 else
     echo "  [pods]  WARN — ${NOT_RUNNING}/${TOTAL} pods not Running (non-critical), total restarts=${RESTARTS}"
-    kubectl get pods -n open5gs --no-headers 2>/dev/null | grep -v " Running " | awk '{print "    !!", $1, $3, $4}' || true
+    kubectl get pods -n open5gs --no-headers 2>/dev/null | { grep -v " Running " || true; } | awk '{print "    !!", $1, $3, $4}'
 fi
 
 # ── 2. gNB → AMF connection ────────────────────────────────────────────────
 GNB_CONNECTED=0
-if kubectl logs -n open5gs deployment/ueransim-gnb --tail=200 2>/dev/null \
+if kubectl logs -n open5gs deployment/ueransim-gnb 2>/dev/null \
         | grep -q "NG Setup procedure is successful"; then
-    # Confirm no recent "AMF selection failed"
     if kubectl logs -n open5gs deployment/ueransim-gnb --tail=50 2>/dev/null \
             | grep -q "AMF selection.*failed"; then
         echo "  [gnb]   WARN — gNB connected but recent AMF selection failures"
@@ -58,14 +57,16 @@ if kubectl logs -n open5gs deployment/ueransim-gnb --tail=200 2>/dev/null \
         echo "  [gnb]   OK — gNB connected to AMF"
     fi
 else
-    echo "  [gnb]   FAIL — gNB has no successful NG Setup in recent logs"
+    echo "  [gnb]   FAIL — gNB has no successful NG Setup in logs"
 fi
 
 # ── 3. UE tunnel count ─────────────────────────────────────────────────────
 GNB_UE_TUNS=$(kubectl exec -n open5gs deployment/ueransim-gnb-ues -- \
-    ip link show 2>/dev/null | grep -c uesimtun || echo 0)
+    ip link show 2>/dev/null | { grep -c uesimtun || true; })
+GNB_UE_TUNS=${GNB_UE_TUNS:-0}
 UES_TUNS=$(kubectl exec -n open5gs deployment/ueransim-ues -- \
-    ip link show 2>/dev/null | grep -c uesimtun || echo 0)
+    ip link show 2>/dev/null | { grep -c uesimtun || true; })
+UES_TUNS=${UES_TUNS:-0}
 TOTAL_TUNS=$((GNB_UE_TUNS + UES_TUNS))
 
 if [[ "$TOTAL_TUNS" -ge 5 ]]; then
@@ -78,7 +79,7 @@ fi
 
 # ── 4. UDM subscription count ─────────────────────────────────────────────
 UDM_SUBS=$(kubectl logs -n open5gs deployment/open5gs-udm --tail=500 2>/dev/null \
-    | grep -o "Maximum number of SDM Subscriptions \[4096\] reached" | wc -l || echo 0)
+    | { grep -c "Maximum number of SDM Subscriptions" || true; })
 if [[ "$UDM_SUBS" -gt 0 ]]; then
     echo "  [udm]   FAIL — SDM subscription limit hit ${UDM_SUBS} time(s) in recent logs"
 else
@@ -134,7 +135,7 @@ fi
 FAILURES=()
 [[ "${#CRITICAL_DOWN[@]}" -gt 0 ]] && FAILURES+=("core NF(s) down: ${CRITICAL_DOWN[*]}")
 [[ "$GNB_CONNECTED" -eq 0 ]]       && FAILURES+=("gNB not connected to AMF")
-[[ "$TOTAL_TUNS" -eq 0 ]]          && FAILURES+=("no UE tunnels active")
+[[ "$TOTAL_TUNS" -lt 5 ]]          && FAILURES+=("only ${TOTAL_TUNS} UE tunnels active (need ≥5)")
 [[ "$UDM_SUBS" -gt 0 ]]            && FAILURES+=("UDM subscription overflow")
 
 if [[ "${#FAILURES[@]}" -gt 0 ]]; then

@@ -58,19 +58,17 @@ start_traffic() {
     ' >/dev/null 2>&1 &
     echo "[traffic] data-plane pings started"
 
-    # 2. Control plane: cycle 8 UEs through deregister/register every 15s.
+    # 2. Control plane: cycle 3 UEs through deregister/register every 60s.
+    # Generates enough AMF/AUSF/UDM/NRF signal without overwhelming GTP state.
     (
-        UEs=("imsi-999700000000003" "imsi-999700000000004" \
-             "imsi-999700000000005" "imsi-999700000000006" \
-             "imsi-999700000000007" "imsi-999700000000008" \
-             "imsi-999700000000009" "imsi-999700000000010")
+        UEs=("imsi-999700000000003" "imsi-999700000000004" "imsi-999700000000005")
         while true; do
-            sleep 15
+            sleep 60
             for ue in "${UEs[@]}"; do
                 kubectl exec -n open5gs "$UE_POD" -- \
                     nr-cli "$ue" --exec "deregister normal" 2>/dev/null || true
             done
-            sleep 5
+            sleep 10
             for ue in "${UEs[@]}"; do
                 kubectl exec -n open5gs "$UE_POD" -- \
                     nr-cli "$ue" --exec "register" 2>/dev/null || true

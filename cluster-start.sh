@@ -15,15 +15,8 @@ SKIP_DEPLOY=false
 [[ "${1:-}" == "--skip-deploy" ]] && SKIP_DEPLOY=true
 
 # --- 1. Fix Docker iptables chains if missing (Docker 29 nftables bug) --------
-echo "[1/5] Checking Docker iptables chains..."
-if ! sudo iptables -t filter -L DOCKER-ISOLATION-STAGE-2 &>/dev/null; then
-  echo "  -> Chains missing, pre-creating..."
-  sudo iptables -t filter -N DOCKER-ISOLATION-STAGE-1 2>/dev/null || true
-  sudo iptables -t filter -N DOCKER-ISOLATION-STAGE-2 2>/dev/null || true
-  echo "  -> Done"
-else
-  echo "  -> OK"
-fi
+# Skipped here — run_all.sh does this once per session before the fault loop.
+echo "[1/5] Skipping iptables check (done once per session by run_all.sh)"
 
 # --- 2. Tear down any existing cluster and recreate ---------------------------
 echo "[2/5] Recreating kind cluster '$CLUSTER'..."
@@ -70,24 +63,42 @@ else
   # ── Open5GS ────────────────────────────────────────────────────────────────
   echo "  [4b] Open5GS..."
   kubectl create namespace open5gs --dry-run=client -o yaml | kubectl apply -f -
-  helm install open5gs oci://registry-1.docker.io/gradiantcharts/open5gs \
-    --version 2.3.4 \
-    --namespace open5gs \
-    -f "$SCRIPT_DIR/kind/open5gs-values.yaml" \
-    --wait --timeout=10m
+  for attempt in 1 2 3; do
+    echo "  [4b] Open5GS install attempt $attempt/3..."
+    helm uninstall open5gs --namespace open5gs 2>/dev/null || true
+    helm install open5gs oci://registry-1.docker.io/gradiantcharts/open5gs \
+      --version 2.3.4 \
+      --namespace open5gs \
+      -f "$SCRIPT_DIR/kind/open5gs-values.yaml" \
+      --wait --timeout=15m && break
+    echo "  [4b] Attempt $attempt failed, retrying..."
+    sleep 10
+  done
   kubectl delete deployment -n open5gs open5gs-webui --ignore-not-found
 
   # ── UERANSIM ───────────────────────────────────────────────────────────────
   echo "  [4c] UERANSIM gNB + UEs..."
-  helm install ueransim-gnb oci://registry-1.docker.io/gradiant/ueransim-gnb \
-    --version 0.2.6 --namespace open5gs \
-    --values https://gradiant.github.io/5g-charts/docs/open5gs-ueransim-gnb/gnb-ues-values.yaml \
-    --set ues.count=10 \
-    --wait --timeout=5m
-  helm install ueransim-ues oci://registry-1.docker.io/gradiant/ueransim-ues \
-    --version 0.1.2 --namespace open5gs \
-    --values https://gradiant.github.io/5g-charts/docs/open5gs-ueransim-gnb/gnb-ues-values.yaml \
-    --wait --timeout=5m
+  for attempt in 1 2 3; do
+    echo "  [4c] ueransim-gnb install attempt $attempt/3..."
+    helm uninstall ueransim-gnb --namespace open5gs 2>/dev/null || true
+    helm install ueransim-gnb oci://registry-1.docker.io/gradiant/ueransim-gnb \
+      --version 0.2.6 --namespace open5gs \
+      --values https://gradiant.github.io/5g-charts/docs/open5gs-ueransim-gnb/gnb-ues-values.yaml \
+      --set ues.count=10 \
+      --wait --timeout=10m && break
+    echo "  [4c] Attempt $attempt failed, retrying..."
+    sleep 10
+  done
+  for attempt in 1 2 3; do
+    echo "  [4c] ueransim-ues install attempt $attempt/3..."
+    helm uninstall ueransim-ues --namespace open5gs 2>/dev/null || true
+    helm install ueransim-ues oci://registry-1.docker.io/gradiant/ueransim-ues \
+      --version 0.1.2 --namespace open5gs \
+      --values https://gradiant.github.io/5g-charts/docs/open5gs-ueransim-gnb/gnb-ues-values.yaml \
+      --wait --timeout=10m && break
+    echo "  [4c] Attempt $attempt failed, retrying..."
+    sleep 10
+  done
 
   echo "  [4d] Provisioning subscribers..."
   bash "$SCRIPT_DIR/experiments/lib/provision_ues.sh" 10
@@ -100,6 +111,15 @@ else
     --set loki.persistence.enabled=false \
     --set grafana.enabled=false \
     --set loki.isDefault=false
+
+  echo "  [loki] Raising max_entries_limit_per_query to 50000..."
+  kubectl rollout status statefulset/loki -n monitoring --timeout=300s || true
+  LOKI_CFG=$(kubectl get secret loki -n monitoring -o jsonpath='{.data.loki\.yaml}' | base64 -d \
+    | sed 's/max_entries_limit_per_query: 5000/max_entries_limit_per_query: 50000/')
+  kubectl patch secret loki -n monitoring --type='json' \
+    -p="[{\"op\":\"replace\",\"path\":\"/data/loki.yaml\",\"value\":\"$(echo "$LOKI_CFG" | base64 -w 0)\"}]"
+  kubectl rollout restart statefulset/loki -n monitoring
+  kubectl rollout status statefulset/loki -n monitoring --timeout=300s || true
 
   helm install jaeger jaegertracing/jaeger \
     --namespace monitoring \

@@ -49,40 +49,92 @@ echo " Phase 3: Fault detection (22 faults)"
 echo " durations: pre=${PRE_DURATION}s  fault=${FAULT_DURATION}s  post=${POST_DURATION}s"
 echo "============================================================"
 
-check_cluster_ready
-
-echo "[setup] Provisioning $UE_COUNT subscribers..."
-bash "$LIB_DIR/provision_ues.sh" "$UE_COUNT"
-scale_ues "$UE_COUNT"
-wait_for_pods_stable open5gs 120
-
-ensure_portforward_prometheus
-ensure_portforward_jaeger
-ensure_portforward_loki
+echo "[setup] Checking Docker iptables chains (once per session)..."
+if ! sudo iptables -t filter -L DOCKER-ISOLATION-STAGE-2 &>/dev/null; then
+    sudo iptables -t filter -N DOCKER-ISOLATION-STAGE-1 2>/dev/null || true
+    sudo iptables -t filter -N DOCKER-ISOLATION-STAGE-2 2>/dev/null || true
+    echo "  -> Created"
+else
+    echo "  -> OK"
+fi
 
 restart_ues() {
-    echo "  [ue-restart] Restarting UDM to clear stale SDM subscriptions..."
-    kubectl rollout restart deployment/open5gs-udm -n open5gs
-    kubectl rollout status deployment/open5gs-udm -n open5gs --timeout=60s
+    # Always restart the gNB to clear stale GTP session state. Without this,
+    # restarted UE pods re-register but the gNB's GTP table mismatches the
+    # new PDU session TEIDs, causing "PDU session not found" uplink failures.
+    echo "  [ue-restart] Restarting gNB for clean GTP state..."
+    kubectl rollout restart deployment/ueransim-gnb -n open5gs
+    kubectl rollout status deployment/ueransim-gnb -n open5gs --timeout=90s
+    # Wait for old gNB pod to terminate so DNS resolves to the new pod IP
+    local gnb_term_pods
+    gnb_term_pods=$(kubectl get pods -n open5gs --no-headers 2>/dev/null \
+        | awk '/ueransim-gnb-/ && /Terminating/{print $1}')
+    if [[ -n "$gnb_term_pods" ]]; then
+        # shellcheck disable=SC2086
+        kubectl wait pod -n open5gs $gnb_term_pods --for=delete --timeout=60s 2>/dev/null || true
+    fi
+    # Wait for gNB to connect to AMF before starting UEs
+    local amf_deadline=$(($(date +%s) + 60))
+    until kubectl logs -n open5gs deployment/ueransim-gnb 2>/dev/null \
+            | grep -q "NG Setup procedure is successful"; do
+        [[ $(date +%s) -gt $amf_deadline ]] && { echo "  [ue-restart] WARNING: gNB did not connect to AMF within 60s"; break; }
+        sleep 3
+    done
 
     echo "  [ue-restart] Restarting UE pods for clean tunnel state..."
     kubectl rollout restart deployment/ueransim-gnb-ues deployment/ueransim-ues -n open5gs
     kubectl rollout status deployment/ueransim-gnb-ues -n open5gs --timeout=90s
     kubectl rollout status deployment/ueransim-ues -n open5gs --timeout=90s
-    # Wait for uesimtun0 to appear on at least one pod
-    local deadline=$(($(date +%s) + 90))
-    until kubectl exec -n open5gs deployment/ueransim-gnb-ues -- \
-            ip link show uesimtun0 >/dev/null 2>&1 || \
-          kubectl exec -n open5gs deployment/ueransim-ues -- \
-            ip link show uesimtun0 >/dev/null 2>&1; do
-        [[ $(date +%s) -gt $deadline ]] && { echo "  [ue-restart] WARNING: uesimtun0 not ready after 90s"; break; }
-        sleep 3
+
+    # Wait for old pods to finish terminating before declaring ready
+    TERM_PODS=$(kubectl get pods -n open5gs --no-headers 2>/dev/null | awk '/Terminating/{print $1}')
+    if [[ -n "$TERM_PODS" ]]; then
+        echo "  [ue-restart] Waiting for terminating pods to clear..."
+        # shellcheck disable=SC2086
+        kubectl wait pod -n open5gs $TERM_PODS --for=delete --timeout=180s 2>/dev/null || {
+            echo "  [ue-restart] ERROR: pods still Terminating after 3 minutes" >&2
+            exit 1
+        }
+    fi
+
+    # Wait for UE tunnels to appear (rollout status only means pod Running, not
+    # that UE registration completed). Poll gnb-ues for ≥2 tunnels, 120s max.
+    echo "  [ue-restart] Waiting for UE tunnels to appear..."
+    local gnb_ue_pod tunnel_deadline tun_count
+    gnb_ue_pod=$(kubectl get pods -n open5gs -l app.kubernetes.io/name=ueransim-gnb \
+        --no-headers 2>/dev/null | grep gnb-ues | awk '{print $1}' | head -1)
+    tunnel_deadline=$(($(date +%s) + 120))
+    tun_count=0
+    while [[ $(date +%s) -lt $tunnel_deadline ]]; do
+        if [[ -n "$gnb_ue_pod" ]]; then
+            tun_count=$(kubectl exec -n open5gs "$gnb_ue_pod" -- \
+                ip link show 2>/dev/null | grep -c uesimtun || true)
+        fi
+        [[ "${tun_count:-0}" -ge 2 ]] && break
+        sleep 5
     done
-    local gnb_tuns; gnb_tuns=$(kubectl exec -n open5gs deployment/ueransim-gnb-ues -- \
-        ip link show 2>/dev/null | grep -c uesimtun || echo 0)
-    local ues_tuns; ues_tuns=$(kubectl exec -n open5gs deployment/ueransim-ues -- \
-        ip link show 2>/dev/null | grep -c uesimtun || echo 0)
-    echo "  [ue-restart] Tunnels ready: gnb-ues=${gnb_tuns} ueransim-ues=${ues_tuns}"
+    echo "  [ue-restart] gnb-ues tunnels after wait: ${tun_count:-0}"
+
+    # Add missing routes for the UPF data-plane gateway on all uesimtun
+    # interfaces. UERANSIM assigns the /32 UE IP but does not add a route
+    # for 10.45.0.1, so pings would fail without this.
+    local ue_pod
+    ue_pod=$(kubectl get pods -n open5gs -l app.kubernetes.io/component=ues \
+        --no-headers 2>/dev/null | awk '{print $1}' | head -1)
+    if [[ -n "$ue_pod" ]]; then
+        kubectl exec -n open5gs "$ue_pod" -- bash -c '
+            for i in $(seq 0 9); do
+                ip link show uesimtun$i >/dev/null 2>&1 || continue
+                ip route add 10.45.0.1 dev uesimtun$i 2>/dev/null || true
+            done
+        ' 2>/dev/null || true
+        if kubectl exec -n open5gs "$ue_pod" -- \
+                ping -I uesimtun0 -c 1 -W 2 10.45.0.1 >/dev/null 2>&1; then
+            echo "  [ue-restart] Data-plane ready (ping OK via $ue_pod)"
+        else
+            echo "  [ue-restart] WARNING: data-plane ping still failing after route add"
+        fi
+    fi
 }
 
 run_fault_experiment() {
@@ -99,14 +151,49 @@ run_fault_experiment() {
     echo "------------------------------------------------------------"
     echo " Fault $num: $name"
     echo "------------------------------------------------------------"
-    if [[ "$RESET_BETWEEN_FAULTS" == "1" ]]; then
-        reset_workload "$UE_COUNT"
-    else
-        restart_ues
+    echo "[reset] Full cluster restart before fault $num..."
+    bash "$SCRIPT_DIR/../../cluster-start.sh"
+    bash "$LIB_DIR/provision_ues.sh" "$UE_COUNT"
+    ensure_portforward_prometheus
+    ensure_portforward_jaeger
+    ensure_portforward_loki
+    # cluster-start.sh already set up gnb+ues fresh — wait for tunnels, then verify
+    echo "  [reset] Waiting for gnb-ues tunnels to appear (120s max)..."
+    local gnb_ue_pod_reset tun_count_reset tun_deadline_reset
+    gnb_ue_pod_reset=$(kubectl get pods -n open5gs -l app.kubernetes.io/name=ueransim-gnb \
+        --no-headers 2>/dev/null | grep gnb-ues | awk '{print $1}' | head -1)
+    tun_deadline_reset=$(($(date +%s) + 120))
+    tun_count_reset=0
+    while [[ $(date +%s) -lt $tun_deadline_reset ]]; do
+        if [[ -n "$gnb_ue_pod_reset" ]]; then
+            tun_count_reset=$(kubectl exec -n open5gs "$gnb_ue_pod_reset" -- \
+                ip link show 2>/dev/null | grep -c uesimtun || true)
+        fi
+        [[ "${tun_count_reset:-0}" -ge 2 ]] && break
+        sleep 5
+    done
+    echo "  [reset] gnb-ues tunnels: ${tun_count_reset:-0}"
+    local ue_pod
+    ue_pod=$(kubectl get pods -n open5gs -l app.kubernetes.io/component=ues \
+        --no-headers 2>/dev/null | awk '{print $1}' | head -1)
+    if [[ -n "$ue_pod" ]]; then
+        kubectl exec -n open5gs "$ue_pod" -- bash -c '
+            for i in $(seq 0 9); do
+                ip link show uesimtun$i >/dev/null 2>&1 || continue
+                ip route add 10.45.0.1 dev uesimtun$i 2>/dev/null || true
+            done
+        ' 2>/dev/null || true
+        if ! kubectl exec -n open5gs "$ue_pod" -- \
+                ping -I uesimtun0 -c 1 -W 2 10.45.0.1 >/dev/null 2>&1; then
+            echo "  [reset] Ping failed after cluster-start — running restart_ues() recovery..."
+            restart_ues
+        else
+            echo "  [reset] Data-plane ready (ping OK via $ue_pod)"
+        fi
     fi
     if ! bash "$LIB_DIR/health_check.sh" "pre-${name}" "$OUT_BASE/${name}/health_pre.json"; then
-        echo "[ABORT] pre-fault health check failed for fault $num ($name)" >&2
-        echo "[ABORT] Fix the cluster and re-run with: --from $num" >&2
+        echo "[ABORT] health check failed after full cluster restart for fault $num ($name)" >&2
+        echo "[ABORT] Re-run with: --from $num" >&2
         exit 1
     fi
     bash "$LIB_DIR/run_fault.sh" \
@@ -117,9 +204,7 @@ run_fault_experiment() {
         --fault-duration "$FAULT_DURATION" \
         --post-duration  "$POST_DURATION" \
         --step           "5s"
-    bash "$LIB_DIR/health_check.sh" "post-${name}" "$OUT_BASE/${name}/health_post.json"
-    echo "[cooldown] 60s between faults..."
-    sleep 60
+    bash "$LIB_DIR/health_check.sh" "post-${name}" "$OUT_BASE/${name}/health_post.json" || true
 }
 
 # Slug == chaos YAML basename, so lib/hooks/<slug>.sh resolves automatically.
