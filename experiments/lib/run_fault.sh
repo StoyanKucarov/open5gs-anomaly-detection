@@ -27,9 +27,9 @@ source "$SCRIPT_DIR/common.sh"
 source "$SCRIPT_DIR/traffic.sh"
 
 # Defaults (env-overridable; CLI flags below take precedence over env)
-PRE_DURATION="${PRE_DURATION:-120}"
+PRE_DURATION="${PRE_DURATION:-600}"
 FAULT_DURATION="${FAULT_DURATION:-300}"
-POST_DURATION="${POST_DURATION:-120}"
+POST_DURATION="${POST_DURATION:-300}"
 STEP="${STEP:-5s}"
 NAME=""
 MANIFEST=""

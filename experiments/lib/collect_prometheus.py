@@ -112,10 +112,10 @@ STANDARD_METRICS = [
      'pfcp_sessions_active'),
     ("open5gs_pfcp_peers_active.csv",
      'pfcp_peers_active'),
-    ("open5gs_gtp_in_packets.csv",
-     'rate(fivegs_ep_n3_gtp_indatapktn3upf[2m])'),
-    ("open5gs_gtp_out_packets.csv",
-     'rate(fivegs_ep_n3_gtp_outdatapktn3upf[2m])'),
+    # NOTE: Open5GS 2.7.5 does not export N3 GTP-U data-packet counters
+    # (fivegs_ep_n3_gtp_*datapktn3upf are absent / flat zero). Use the
+    # already-collected UPF container network_rx/tx_bytes_rate as the
+    # data-plane traffic signal instead.
     # SMF: N4 session report success rate (gap = PFCP health)
     ("open5gs_smf_n4_session_report.csv",
      'rate(fivegs_smffunction_sm_n4sessionreport[2m])'),
@@ -132,6 +132,33 @@ STANDARD_METRICS = [
     # GTP: node failure counter
     ("open5gs_gtp_node_failed.csv",
      'rate(gtp_new_node_failed[2m])'),
+
+    # ---- Failure counters (primary fault-distinguishing signals) ----
+    # Zero-suppressed until first failure: empty CSV in pre, populates
+    # during/after a fault — exactly the discriminating behaviour wanted.
+    ("open5gs_smf_pdu_session_fail.csv",
+     'rate(fivegs_smffunction_sm_pdusessioncreationfail[2m])'),
+    ("open5gs_smf_n4_session_estab_fail.csv",
+     'rate(fivegs_smffunction_sm_n4sessionestabfail[2m])'),
+    ("open5gs_upf_n4_session_estab_fail.csv",
+     'rate(fivegs_upffunction_sm_n4sessionestabfail[2m])'),
+    ("open5gs_amf_reg_init_fail.csv",
+     'rate(fivegs_amffunction_rm_reginitfail[2m])'),
+    ("open5gs_amf_reg_mob_fail.csv",
+     'rate(fivegs_amffunction_rm_regmobfail[2m])'),
+    ("open5gs_amf_reg_period_fail.csv",
+     'rate(fivegs_amffunction_rm_regperiodfail[2m])'),
+    ("open5gs_amf_reg_emerg_fail.csv",
+     'rate(fivegs_amffunction_rm_regemergfail[2m])'),
+
+    # ---- Clean session gauges (SMF-side; not affected by the UPF
+    # upf_sessionnbr/qosflows over-count bug) ----
+    ("open5gs_smf_ues_active.csv",
+     'ues_active'),
+    ("open5gs_smf_bearers_active.csv",
+     'bearers_active'),
+    ("open5gs_smf_qos_flow_nbr.csv",
+     'fivegs_smffunction_sm_qos_flow_nbr'),
 ]
 
 

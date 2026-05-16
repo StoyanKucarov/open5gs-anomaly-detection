@@ -7,11 +7,9 @@
 # Prometheus + Jaeger + Loki + K8s events + NRF API + RTT collection.
 #
 # Durations are env-overridable:
-#   PRE_DURATION    (default 120s)
+#   PRE_DURATION    (default 600s)
 #   FAULT_DURATION  (default 300s)
-#   POST_DURATION   (default 120s)
-# Boyan's main pipeline uses 600/300/300:
-#   PRE_DURATION=600 FAULT_DURATION=300 POST_DURATION=300 bash run_all.sh
+#   POST_DURATION   (default 300s)
 #
 # Usage:
 #   bash run_all.sh [--from N]          # skip faults 1..N-1
@@ -32,9 +30,9 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-PRE_DURATION="${PRE_DURATION:-120}"
+PRE_DURATION="${PRE_DURATION:-600}"
 FAULT_DURATION="${FAULT_DURATION:-300}"
-POST_DURATION="${POST_DURATION:-120}"
+POST_DURATION="${POST_DURATION:-300}"
 
 # Reset between faults is disabled: the post-phase (300s) + cooldown (60s) +
 # pre-phase (600s) = 960s of recovery time is sufficient for all faults to

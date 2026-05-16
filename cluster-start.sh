@@ -14,6 +14,48 @@ KIND_CONFIG="$SCRIPT_DIR/kind/kind-config.yaml"
 SKIP_DEPLOY=false
 [[ "${1:-}" == "--skip-deploy" ]] && SKIP_DEPLOY=true
 
+UE_COUNT=10  # must match `ues.count` and provision_ues.sh below
+
+# ── NF readiness probes (ordering gated on real state, not fixed sleeps) ──────
+# Open5GS NF metrics bind to the pod eth0 IP (not localhost), so curl the pod
+# IP from inside the pod. No port-forward / Prometheus dependency.
+nf_metric() {
+  # $1=nf (amf|smf|upf) $2=metric -> prints summed integer value, or returns 1
+  local nf="$1" metric="$2" pod ip
+  pod=$(kubectl get pods -n open5gs --no-headers 2>/dev/null \
+        | grep -i "open5gs-${nf}-" | grep -i ' Running ' | awk '{print $1}' | head -1)
+  [[ -z "$pod" ]] && return 1
+  ip=$(kubectl get pod -n open5gs "$pod" -o jsonpath='{.status.podIP}' 2>/dev/null)
+  [[ -z "$ip" ]] && return 1
+  kubectl exec -n open5gs "$pod" -c "open5gs-${nf}" -- \
+      curl -s --max-time 5 "${ip}:9090/metrics" 2>/dev/null \
+    | awk -v m="$metric" '$1==m {s+=$2; seen=1} END{ if (!seen) exit 1; print int(s) }'
+}
+
+wait_for_metric() {
+  # $1=nf $2=metric $3=test-op(-ge|-eq) $4=target $5=timeout_s $6=label
+  local nf="$1" metric="$2" op="$3" target="$4" timeout="$5" label="$6"
+  local deadline=$(( $(date +%s) + timeout )) val ok
+  while [[ $(date +%s) -lt $deadline ]]; do
+    val=$(nf_metric "$nf" "$metric" 2>/dev/null || true)
+    if [[ "$val" =~ ^[0-9]+$ ]]; then
+      ok=0
+      case "$op" in
+        -ge) if [[ "$val" -ge "$target" ]]; then ok=1; fi ;;
+        -gt) if [[ "$val" -gt "$target" ]]; then ok=1; fi ;;
+        -eq) if [[ "$val" -eq "$target" ]]; then ok=1; fi ;;
+      esac
+      if [[ "$ok" -eq 1 ]]; then
+        echo "  [gate] OK — ${label} (${metric}=${val})"
+        return 0
+      fi
+    fi
+    sleep 5
+  done
+  echo "  [gate] TIMEOUT — ${label} (${metric}=${val:-<none>}, need ${op} ${target} after ${timeout}s)" >&2
+  return 1
+}
+
 # --- 1. Fix Docker iptables chains if missing (Docker 29 nftables bug) --------
 # Skipped here — run_all.sh does this once per session before the fault loop.
 echo "[1/5] Skipping iptables check (done once per session by run_all.sh)"
@@ -76,6 +118,14 @@ else
   done
   kubectl delete deployment -n open5gs open5gs-webui --ignore-not-found
 
+  # ── Gate A: SMF↔UPF PFCP association up before bringing up the RAN ──────────
+  # helm --wait only guarantees pod-Ready, not that the N4/PFCP control plane
+  # is established. Starting the gNB/UEs before this is the root of the race.
+  if ! wait_for_metric upf pfcp_peers_active -ge 1 240 "SMF↔UPF PFCP association"; then
+    echo "  [gate] FATAL — core PFCP control plane never came up" >&2
+    exit 1
+  fi
+
   # ── UERANSIM ───────────────────────────────────────────────────────────────
   echo "  [4c] UERANSIM gNB + UEs..."
   for attempt in 1 2 3; do
@@ -89,6 +139,22 @@ else
     echo "  [4c] Attempt $attempt failed, retrying..."
     sleep 10
   done
+  # ── Gate B: gNB completed NG Setup with AMF before UEs register ────────────
+  # UERANSIM's gNB does NOT auto-reconnect after an SCTP/NGAP miss, so a lost
+  # race here is permanent until the gNB is restarted — hence bounded retry.
+  if ! wait_for_metric amf gnb -ge 1 150 "gNB NG Setup with AMF"; then
+    gnb_ok=0
+    for r in 1 2 3; do
+      echo "  [gate] gNB not connected — restarting ueransim-gnb (retry $r/3)..."
+      kubectl rollout restart deployment/ueransim-gnb -n open5gs
+      kubectl rollout status  deployment/ueransim-gnb -n open5gs --timeout=120s || true
+      if wait_for_metric amf gnb -ge 1 120 "gNB NG Setup with AMF (retry $r)"; then
+        gnb_ok=1; break
+      fi
+    done
+    [[ "$gnb_ok" -eq 1 ]] || { echo "  [gate] FATAL — gNB never completed NG Setup" >&2; exit 1; }
+  fi
+
   for attempt in 1 2 3; do
     echo "  [4c] ueransim-ues install attempt $attempt/3..."
     helm uninstall ueransim-ues --namespace open5gs 2>/dev/null || true
@@ -101,9 +167,26 @@ else
   done
 
   echo "  [4d] Provisioning subscribers..."
-  bash "$SCRIPT_DIR/experiments/lib/provision_ues.sh" 10
+  bash "$SCRIPT_DIR/experiments/lib/provision_ues.sh" "$UE_COUNT"
   kubectl rollout restart deployment/ueransim-gnb-ues -n open5gs
   kubectl rollout status  deployment/ueransim-gnb-ues -n open5gs --timeout=60s
+
+  # ── Gate C: UE PDU sessions actually established (not just pods Running) ────
+  # rollout status only means the pod is Running; it does NOT mean the UEs
+  # completed registration + PDU session over PFCP. Probe the real state.
+  if ! wait_for_metric smf pfcp_sessions_active -ge "$UE_COUNT" 180 "${UE_COUNT} UE PDU sessions"; then
+    ue_ok=0
+    for r in 1 2 3; do
+      echo "  [gate] <${UE_COUNT} PDU sessions — restarting UEs (retry $r/3)..."
+      kubectl rollout restart deployment/ueransim-gnb-ues deployment/ueransim-ues -n open5gs
+      kubectl rollout status  deployment/ueransim-gnb-ues -n open5gs --timeout=120s || true
+      kubectl rollout status  deployment/ueransim-ues     -n open5gs --timeout=120s || true
+      if wait_for_metric smf pfcp_sessions_active -ge "$UE_COUNT" 150 "${UE_COUNT} UE PDU sessions (retry $r)"; then
+        ue_ok=1; break
+      fi
+    done
+    [[ "$ue_ok" -eq 1 ]] || { echo "  [gate] FATAL — UEs never established ${UE_COUNT} PDU sessions" >&2; exit 1; }
+  fi
 
   helm install loki grafana/loki-stack \
     --namespace monitoring \
@@ -112,10 +195,10 @@ else
     --set grafana.enabled=false \
     --set loki.isDefault=false
 
-  echo "  [loki] Raising max_entries_limit_per_query to 50000..."
+  echo "  [loki] Raising max_entries_limit_per_query to 500000..."
   kubectl rollout status statefulset/loki -n monitoring --timeout=300s || true
   LOKI_CFG=$(kubectl get secret loki -n monitoring -o jsonpath='{.data.loki\.yaml}' | base64 -d \
-    | sed 's/max_entries_limit_per_query: 5000/max_entries_limit_per_query: 50000/')
+    | sed 's/max_entries_limit_per_query: 5000/max_entries_limit_per_query: 500000/')
   kubectl patch secret loki -n monitoring --type='json' \
     -p="[{\"op\":\"replace\",\"path\":\"/data/loki.yaml\",\"value\":\"$(echo "$LOKI_CFG" | base64 -w 0)\"}]"
   kubectl rollout restart statefulset/loki -n monitoring

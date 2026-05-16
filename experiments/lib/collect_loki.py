@@ -23,6 +23,8 @@ from pathlib import Path
 
 # (output_filename, LogQL query)
 LOKI_QUERIES = [
+    ("all.csv",
+     '{namespace="open5gs"}'),
     ("errors.csv",
      '{namespace="open5gs"} |~ "(?i)(error|exception|refused|failed|fatal|oom|killed)"'),
     ("nrf_lifecycle.csv",
@@ -33,7 +35,8 @@ LOKI_QUERIES = [
      '{namespace="open5gs"} |~ "(?i)(Connection timer expired|Connection refused|Failed to connect|response_handler.*failed)"'),
 ]
 
-LIMIT = 50000  # max lines per query
+LIMIT = 500000  # max lines per query (must match max_entries_limit_per_query
+                # patched in cluster-start.sh — server cap is the binding one)
 
 
 def query_range(url: str, query: str, start_ns: int, end_ns: int) -> dict:
@@ -47,7 +50,7 @@ def query_range(url: str, query: str, start_ns: int, end_ns: int) -> dict:
     req_url = f"{url}/loki/api/v1/query_range?{params}"
     for attempt in range(3):
         try:
-            with urllib.request.urlopen(req_url, timeout=30) as resp:
+            with urllib.request.urlopen(req_url, timeout=120) as resp:
                 return json.load(resp)
         except Exception as e:
             if attempt == 2:

@@ -39,7 +39,7 @@ def jaeger_get(url: str, path: str, params: dict) -> dict:
     req_url = f"{url}{path}?{qs}" if qs else f"{url}{path}"
     for attempt in range(3):
         try:
-            with urllib.request.urlopen(req_url, timeout=30) as resp:
+            with urllib.request.urlopen(req_url, timeout=120) as resp:
                 return json.load(resp)
         except Exception as e:
             if attempt == 2:
@@ -54,7 +54,7 @@ def collect_service(jaeger_url: str, service: str, start_us: int, end_us: int) -
         "service": service,
         "start": start_us,
         "end": end_us,
-        "limit": 2000,
+        "limit": 20000,
     })
     return data.get("data", [])
 
