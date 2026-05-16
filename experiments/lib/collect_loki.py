@@ -5,6 +5,17 @@ experiments/lib/collect_loki.py
 Query Loki HTTP API for a fixed set of LogQL queries over a time window
 and write each query result to a CSV file (one row per log line).
 
+Results are fetched with cursor-based pagination (small per-page limit),
+so no single request is large enough to hit Loki's server-side
+max_entries_limit_per_query cap or time out — this works regardless of
+log volume and without depending on the cluster-start cap patch.
+
+Beyla pods are excluded at the selector level: at DEBUG they emit ~85%
+of the namespace's log volume (eBPF name-resolution chatter) and carry
+zero fault-atlas signal — Beyla's signal is its Prometheus metrics and
+traces, collected separately. ueransim is kept (UE/gNB failure logs are
+signal).
+
 Usage:
     python3 collect_loki.py \
         --url http://127.0.0.1:3100 \
@@ -21,75 +32,101 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+_SEL = '{namespace="open5gs", pod!~"beyla-.+"}'
+
 # (output_filename, LogQL query)
 LOKI_QUERIES = [
     ("all.csv",
-     '{namespace="open5gs"}'),
+     _SEL),
     ("errors.csv",
-     '{namespace="open5gs"} |~ "(?i)(error|exception|refused|failed|fatal|oom|killed)"'),
+     _SEL + ' |~ "(?i)(error|exception|refused|failed|fatal|oom|killed)"'),
     ("nrf_lifecycle.csv",
-     '{namespace="open5gs"} |~ "(?i)(heartbeat|de-registered|Retry registration|NF registered|NF de-registered)"'),
+     _SEL + ' |~ "(?i)(heartbeat|de-registered|Retry registration|NF registered|NF de-registered)"'),
     ("ue_failures.csv",
-     '{namespace="open5gs"} |~ "(?i)(PAYLOAD_NOT_FORWARDED|Registration reject|UE_IDENTITY|FIVEG_SERVICES|Cannot receive SBI)"'),
+     _SEL + ' |~ "(?i)(PAYLOAD_NOT_FORWARDED|Registration reject|UE_IDENTITY|FIVEG_SERVICES|Cannot receive SBI)"'),
     ("scp_routing.csv",
-     '{namespace="open5gs"} |~ "(?i)(Connection timer expired|Connection refused|Failed to connect|response_handler.*failed)"'),
+     _SEL + ' |~ "(?i)(Connection timer expired|Connection refused|Failed to connect|response_handler.*failed)"'),
 ]
 
-LIMIT = 500000  # max lines per query (must match max_entries_limit_per_query
-                # patched in cluster-start.sh — server cap is the binding one)
+PER_PAGE = 5000     # entries per request — under Loki's default cap, fast
+MAX_PAGES = 5000    # infinite-loop guard (PER_PAGE*MAX_PAGES = 25M lines)
 
 
-def query_range(url: str, query: str, start_ns: int, end_ns: int) -> dict:
+def _request(url: str, query: str, start_ns: int, end_ns: int) -> dict:
     params = urllib.parse.urlencode({
         "query":     query,
         "start":     start_ns,
         "end":       end_ns,
-        "limit":     LIMIT,
+        "limit":     PER_PAGE,
         "direction": "forward",
     })
     req_url = f"{url}/loki/api/v1/query_range?{params}"
     for attempt in range(3):
         try:
-            with urllib.request.urlopen(req_url, timeout=120) as resp:
+            with urllib.request.urlopen(req_url, timeout=60) as resp:
                 return json.load(resp)
         except Exception as e:
             if attempt == 2:
                 print(f"  [WARN] Loki request failed: {e}", file=sys.stderr)
-                return {}
+                return None
             time.sleep(2)
-    return {}
+    return None
 
 
-def streams_to_rows(data: dict) -> list:
-    rows = []
-    result = data.get("data", {}).get("result", []) or []
-    for stream in result:
+def _streams_to_tuples(data: dict) -> list:
+    out = []
+    for stream in (data.get("data", {}).get("result", []) or []):
         labels = stream.get("stream", {}) or {}
         pod = labels.get("pod", "")
         container = labels.get("container", "")
         app = labels.get("app", "") or labels.get("app_kubernetes_io_name", "")
         for ts_ns, line in stream.get("values", []):
-            rows.append({
-                "timestamp_ns": ts_ns,
-                "pod":          pod,
-                "container":    container,
-                "app":          app,
-                "line":         line,
-            })
-    return rows
+            out.append((int(ts_ns), pod, container, app, line))
+    return out
+
+
+def fetch_paged(url: str, query: str, start_ns: int, end_ns: int):
+    """Cursor-paginate forward through the window. Returns (rows, truncated)."""
+    rows = []
+    seen = set()
+    cursor = start_ns
+    truncated = False
+    for _ in range(MAX_PAGES):
+        data = _request(url, query, cursor, end_ns)
+        if data is None:
+            truncated = True
+            break
+        tup = _streams_to_tuples(data)
+        if not tup:
+            break
+        tup.sort(key=lambda t: t[0])
+        new = 0
+        for ts, pod, container, app, line in tup:
+            key = (ts, pod, line)
+            if key in seen:
+                continue
+            seen.add(key)
+            rows.append({"timestamp_ns": ts, "pod": pod,
+                         "container": container, "app": app, "line": line})
+            new += 1
+        if len(tup) < PER_PAGE:
+            break                       # window exhausted
+        max_ts = tup[-1][0]
+        if max_ts <= cursor and new == 0:
+            # >PER_PAGE entries share one ns: skip past it (rare; tiny gap)
+            print(f"  [WARN] paging stalled at {cursor}; advancing 1ns",
+                  file=sys.stderr)
+            cursor = max_ts + 1
+        else:
+            cursor = max_ts             # inclusive; dedupe handles overlap
+    else:
+        truncated = True                # hit MAX_PAGES
+
+    rows.sort(key=lambda r: r["timestamp_ns"])
+    return rows, truncated
 
 
 def write_csv(rows: list, out_path: Path):
-    if not rows:
-        # Still write an empty file with a header so downstream code doesn't
-        # have to special-case missing files.
-        with open(out_path, "w", newline="") as f:
-            writer = csv.DictWriter(
-                f, fieldnames=["timestamp_ns", "pod", "container", "app", "line"]
-            )
-            writer.writeheader()
-        print(f"  [loki] {out_path.name}: 0 lines")
-        return
     fieldnames = ["timestamp_ns", "pod", "container", "app", "line"]
     with open(out_path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
@@ -113,11 +150,11 @@ def main():
     end_ns   = args.end   * 1_000_000_000
 
     for fname, query in LOKI_QUERIES:
-        data = query_range(args.url, query, start_ns, end_ns)
-        rows = streams_to_rows(data)
+        rows, truncated = fetch_paged(args.url, query, start_ns, end_ns)
         write_csv(rows, out_dir / fname)
-        if len(rows) >= LIMIT:
-            print(f"  [loki] WARNING: {fname} hit {LIMIT}-line cap — may be truncated",
+        if truncated:
+            print(f"  [loki] WARNING: {fname} incomplete "
+                  f"(request failed or hit {MAX_PAGES}-page guard)",
                   file=sys.stderr)
 
 

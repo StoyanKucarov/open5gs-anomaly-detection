@@ -195,10 +195,12 @@ else
     --set grafana.enabled=false \
     --set loki.isDefault=false
 
-  echo "  [loki] Raising max_entries_limit_per_query to 500000..."
+  # collect_loki.py paginates at 5000/page so the default cap already works;
+  # 50000 is just a safety margin (not load-bearing anymore).
+  echo "  [loki] Raising max_entries_limit_per_query to 50000..."
   kubectl rollout status statefulset/loki -n monitoring --timeout=300s || true
   LOKI_CFG=$(kubectl get secret loki -n monitoring -o jsonpath='{.data.loki\.yaml}' | base64 -d \
-    | sed 's/max_entries_limit_per_query: 5000/max_entries_limit_per_query: 500000/')
+    | sed 's/max_entries_limit_per_query: 5000/max_entries_limit_per_query: 50000/')
   kubectl patch secret loki -n monitoring --type='json' \
     -p="[{\"op\":\"replace\",\"path\":\"/data/loki.yaml\",\"value\":\"$(echo "$LOKI_CFG" | base64 -w 0)\"}]"
   kubectl rollout restart statefulset/loki -n monitoring

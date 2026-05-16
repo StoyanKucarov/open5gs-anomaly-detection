@@ -89,11 +89,12 @@ spec:
         # Sample everything (100%)
         - name: OTEL_TRACES_SAMPLER
           value: "always_on"
-        # Debug logging to see process discovery
+        # INFO: DEBUG emits ~85% of namespace log volume (eBPF name-resolution
+        # chatter) and carries no fault-atlas signal; metrics/traces unaffected.
         - name: OTEL_EBPF_LOG_LEVEL
-          value: "DEBUG"
+          value: "INFO"
         - name: BEYLA_LOG_LEVEL
-          value: "DEBUG"
+          value: "INFO"
         ports:
         - name: metrics
           containerPort: 9090
