@@ -63,7 +63,28 @@ echo "[1/5] Skipping iptables check (done once per session by run_all.sh)"
 # --- 2. Tear down any existing cluster and recreate ---------------------------
 echo "[2/5] Recreating kind cluster '$CLUSTER'..."
 kind delete cluster --name "$CLUSTER" 2>/dev/null || true
-kind create cluster --config "$KIND_CONFIG"
+# Inject Docker Hub auth into a runtime config so cluster pulls are
+# authenticated (200/6h vs unauth 100/6h). Token lives in a gitignored
+# file; the tracked kind-config.yaml stays secret-free.
+KIND_EFFECTIVE="$KIND_CONFIG"
+AUTH_FILE="$SCRIPT_DIR/kind/.dockerhub-auth"
+if [[ -f "$AUTH_FILE" ]]; then
+  DH_USER=$(sed -n '1p' "$AUTH_FILE")
+  DH_TOKEN=$(sed -n '2p' "$AUTH_FILE")
+  KIND_EFFECTIVE="$SCRIPT_DIR/kind/.kind-config.runtime.yaml"
+  cp "$KIND_CONFIG" "$KIND_EFFECTIVE"
+  cat >> "$KIND_EFFECTIVE" <<EOF
+containerdConfigPatches:
+  - |-
+    [plugins."io.containerd.grpc.v1.cri".registry.configs."registry-1.docker.io".auth]
+      username = "${DH_USER}"
+      password = "${DH_TOKEN}"
+EOF
+  echo "  -> Docker Hub auth injected (user: ${DH_USER})"
+else
+  echo "  -> WARN: no kind/.dockerhub-auth — pulls UNAUTHENTICATED (100/6h)"
+fi
+kind create cluster --config "$KIND_EFFECTIVE"
 echo "  -> Cluster created"
 kubectl get nodes
 

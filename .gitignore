@@ -1,1 +1,3 @@
 data
+kind/.dockerhub-auth
+kind/.kind-config.runtime.yaml
