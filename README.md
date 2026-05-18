@@ -8,9 +8,16 @@ This pack only covers **platform setup + data collection**. Analysis is out of s
 > **Extended setup notes:** See [`EXTENSIONS.md`](./EXTENSIONS.md) for the full
 > list of changes added on top of this base — extra signal collectors (Loki,
 > K8s events, NRF API, RTT), synthetic traffic generators, per-fault hooks,
-> the soft-reset workflow between faults, bug fixes encountered during bring-up,
-> the now-10-fault dispatch in Phase 3, and Boyan's run invocation
-> (`PRE_DURATION=600 FAULT_DURATION=300 POST_DURATION=300`).
+> bug fixes encountered during bring-up, and the Phase-3 fault dispatch.
+>
+> ⚠️ **Current state (2026-05-16): read [`EXTENSIONS.md` §10](./EXTENSIONS.md#10-pipeline-hardening--2026-05-16) first.**
+> It supersedes several numbers below — the pipeline now runs **22 faults**,
+> default durations are **600/300/300** (no env vars needed), `run_all.sh`
+> does a **full cluster recreate per fault** (soft-reset is shelved), bring-up
+> is gated on strict 10/10 readiness, Loki collection is **paginated** (the
+> 5000-line cap is gone) with Beyla logs excluded, and **every teammate must
+> create their own gitignored `kind/.dockerhub-auth`** (username + read-only
+> PAT, two lines) or the cluster will hit Docker Hub pull rate limits.
 
 ---
 
@@ -257,8 +264,8 @@ BASELINE_DURATION=600 FAULT_DURATION=300 RECOVERY_DURATION=300 \
 `experiments/data/<fault>/run_NN/<phase>/`:
 
 - **Prometheus** (one file per metric): CPU usage/throttle rates, container & pod memory, pod restarts, ready/running counts, OOM events, UE TUN RX/TX bytes.
-- **Loki** (one file per query): all logs in `open5gs` namespace; targeted error queries; NRF heartbeat lifecycle; UE-visible failures (Registration reject, etc.); SCP routing errors. Capped at 5000 lines per query.
-- **Jaeger**: services list + up to 200 traces per service per phase.
+- **Loki** (one file per query): all logs in `open5gs` namespace (Beyla excluded); targeted error queries; NRF heartbeat lifecycle; UE-visible failures (Registration reject, etc.); SCP routing errors. **Cursor-paginated — no line cap** (see EXTENSIONS §10.5).
+- **Jaeger**: services list + up to 20000 traces per service per phase (raised from 2000; see EXTENSIONS §10.7).
 - **NRF API snapshot**: registered NF instance counts per NF type (drops to 0 during NRF kill).
 - **K8s Events**: `kubectl get events -n open5gs` filtered to the phase window. The collector filters out two known noise sources: `open5gs-populate` (permanent CrashLoopBackOff since cluster init) and `FailedGetScale` from a misconfigured HPA targeting a non-existent StatefulSet.
 - **`fault/rtt_samples.txt`** for network-delay/partition only.
@@ -280,8 +287,9 @@ experiments/data/<fault-name>/run_NN/
 - **`pod_status_ready` misses brief crashes.** Prometheus scrapes every 5–15 s; pod restarts often complete in 10–50 s. Use the memory drop or `kube_pod_container_status_restarts_total` instead.
 - **StressChaos memory ≠ container memory.** stress-ng runs in chaos-daemon's cgroup. `container_memory_*` for the target won't budge unless you also force allocation inside the target (we do this for UPF in `run_experiment.sh`).
 - **Beyla can't see TC-layer network delay.** Jaeger spans look normal even with 500 ms confirmed. Ping RTT samples are the only signal.
-- **Jaeger in-memory storage.** No persistence across pod restart. Collection must happen while port-forwards are active — `run_experiment.sh` always collects at end-of-phase before tearing down.
-- **Loki 5000-line cap per query.** High-error experiments may saturate this and undercount.
+- **Jaeger in-memory storage.** No persistence across pod restart. Collection must happen while port-forwards are active — collected at end-of-phase before tearing down.
+- ~~**Loki 5000-line cap per query.**~~ **Resolved (2026-05-16)** — `collect_loki.py` now cursor-paginates; no cap, no undercount. See EXTENSIONS §10.5.
+- **Signal caveats** (use the right metric): `upf_session_nbr`/`upf_qos_flows` over-count — use `pfcp_sessions_active`/`smf_ues_active`; GTP N3 packet counters and AMF `rm_regtime` are not exported by this build; control-plane workload is light so AMF/registration faults are under-stimulated. Full list: EXTENSIONS §10.10.
 - **K8s Events background noise.** `open5gs-populate` (permanent CrashLoop) and HPA `FailedGetScale` are filtered in `collect.py`; if you add NFs, watch for new noise.
 - **Network-partition target = SCP.** Open5GS uses indirect SBI (Model D). AMF↔NRF directly partition has zero effect — everything goes via SCP.
 

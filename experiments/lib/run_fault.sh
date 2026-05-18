@@ -87,6 +87,35 @@ trap _run_fault_cleanup EXIT
 
 start_traffic
 
+# ---------------------------------------------------------------------------
+# Data-plane cleanliness gate (orphaned-bearer guard)
+# ---------------------------------------------------------------------------
+# cluster-start.sh gates the control plane (pods Ready, NFs registered,
+# pfcp_sessions_active>=10). It cannot see this failure: it runs before traffic
+# exists, and the symptom only appears once the ping loop hits a UE whose PDU
+# session was orphaned at bring-up (UPF floods 'Send Error Indication',
+# contaminating the PRE baseline — seen in 7/22 prior runs). So this gate lives
+# here, after start_traffic, where the evidence is observable. Re-attach all
+# UEs once as a clean slate, then require zero such errors for 15s before PRE.
+repair_orphaned_bearers || true
+DP_GATE_OK=0
+for attempt in 1 2 3; do
+    sleep 15
+    UPF_POD=$(kubectl get pod -n open5gs -l app.kubernetes.io/name=upf \
+                  -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+    n=$(kubectl logs -n open5gs "$UPF_POD" --since=15s 2>/dev/null \
+            | grep -c 'Send Error Indication' || true)
+    if [[ "${n:-0}" -eq 0 ]]; then DP_GATE_OK=1; break; fi
+    echo "[gate] data plane dirty: $n orphaned-bearer error(s) (attempt $attempt/3)"
+    repair_orphaned_bearers || true
+done
+if [[ "$DP_GATE_OK" -ne 1 ]]; then
+    echo "FATAL: orphaned GTP bearer persists after 3 repair attempts;" \
+         "PRE baseline would be contaminated. Resume with --from N." >&2
+    exit 1
+fi
+echo "[gate] data plane clean — proceeding to PRE window"
+
 echo ""
 echo "--- Fault: $NAME ---"
 log_experiment_start "$NAME" "$OUT_DIR"
@@ -116,6 +145,30 @@ sleep_with_progress "$PRE_DURATION" "pre-fault baseline"
 PRE_END=$(now_ts)
 wait "$PRE_RTT_PID" 2>/dev/null || true
 collect_phase pre "$PRE_START" "$PRE_END"
+
+# Fail-safe: even past the gate, refuse a baseline saturated by a single
+# orphaned bearer (one TEID's 'Send Error Indication' > 30% of pre error lines).
+PRE_ERR="$OUT_DIR/loki/pre/errors.csv"
+if [[ -f "$PRE_ERR" ]] && ! python3 - "$PRE_ERR" <<'PYEOF'
+import csv, re, sys, collections
+rows = list(csv.reader(open(sys.argv[1], newline='')))
+body = rows[1:] if rows else []
+if not body:
+    sys.exit(0)
+teid = collections.Counter()
+for r in body:
+    line = r[-1] if r else ""
+    if "Send Error Indication" in line:
+        m = re.search(r"TEID:0x[0-9a-fA-F]+", line)
+        teid[m.group(0) if m else "?"] += 1
+top = max(teid.values()) if teid else 0
+sys.exit(1 if top > 0.30 * len(body) else 0)
+PYEOF
+then
+    echo "FATAL: PRE baseline contaminated by an orphaned-bearer SEI flood" \
+         "(single TEID > 30% of $PRE_ERR). Discard & resume with --from N." >&2
+    exit 1
+fi
 
 # ---------------------------------------------------------------------------
 # Inject fault

@@ -326,3 +326,145 @@ Analysis code built against the original `experiments/` layout will NOT
 run unchanged against `reproduce/data/`. Either adapt the existing
 `experiments/analyze.py` to the CSV/`pre`/`during`/`post` schema, or
 write an adjacent `analyze_reproduce.py`.
+
+---
+
+## 10. Pipeline hardening — 2026-05-16
+
+A second hardening pass after the first full-batch attempts produced
+contaminated baselines, silent collection failures, and Docker Hub
+rate-limit stalls. **This section supersedes the relevant numbers in
+§1–§9 above** (fault count, durations, reset model, Loki/Jaeger caps).
+All changes are committed; scripts were not reverted.
+
+### 10.1 Fault count & dispatch
+
+- Phase 3 now dispatches **22 faults** (not 10). Output path is
+  `data/experiments/C-fault-detection/<NN-slug>/`.
+
+### 10.2 Phase durations are now 600 / 300 / 300 by default
+
+- `run_all.sh` and `run_fault.sh` default `PRE/FAULT/POST = 600/300/300`
+  (previously 120/300/120). No env vars needed; the old
+  `PRE_DURATION=600 …` invocation is now redundant.
+
+### 10.3 Reset model: full recreate per fault (soft-reset shelved)
+
+- `run_all.sh` calls **`cluster-start.sh` (full `kind delete`+`create`)
+  before every fault**, not `reset_workload`. `RESET_BETWEEN_FAULTS`
+  defaults to `0`; `reset_workload.sh` is now **legacy/unused**.
+- Rationale: soft-reset (rolling restart) reintroduced the documented
+  SCP→AUSF stale-pod-IP routing failures and gNB no-reconnect race;
+  full recreate is the proven-clean path. Cost: ~15–20 min recreate
+  per fault → **~45–55 min/fault, ~16–20 h for the 22-fault batch**.
+
+### 10.4 Bring-up ordering gates (cluster-start.sh)
+
+Cold bring-up has a race (gNB NG-Setup → UE register → SMF↔UPF PFCP →
+PDU/GTP). UERANSIM's gNB does **not** auto-reconnect after an SCTP drop,
+so a lost race silently yields a degraded baseline (the old
+`health_check.sh` accepted ≥5/10 tunnels and never checked PFCP). Three
+state-probe gates were added to `cluster-start.sh`, each polling the NF
+Prometheus endpoint (bound to pod eth0 IP, curled in-pod):
+
+| Gate | Check | Position | On miss |
+|---|---|---|---|
+| A | `upf pfcp_peers_active ≥ 1` | after Open5GS install, before RAN | FATAL after 240s |
+| B | `amf gnb ≥ 1` (NG Setup) | after gNB install, before UEs | restart gNB ×3, then FATAL |
+| C | `smf pfcp_sessions_active ≥ UE_COUNT` (**strict 10/10**) | after provision+rollout | restart UEs ×3, then FATAL |
+
+`UE_COUNT=10` is centralized. FATAL aborts the batch (resume with
+`--from N`) rather than ever measuring a degraded baseline. Note Gate C
+queries **SMF** (`pfcp_sessions_active` is an SMF metric; the UPF does
+not expose it).
+
+### 10.5 Loki collection rewritten (`collect_loki.py`)
+
+- **Cursor pagination**: `PER_PAGE=5000`, forward cursor, cross-page
+  dedupe by `(ts,pod,line)`, `MAX_PAGES` guard. Replaces the single
+  capped query that timed out / 400'd on large windows. Works
+  regardless of volume and **without** depending on the server-cap
+  patch. The old "5000-line cap / undercount" limitation is **gone**.
+- **Beyla excluded at the selector**: all 5 queries use
+  `{namespace="open5gs", pod!~"beyla-.+"}`. At `DEBUG`, Beyla emitted
+  ~85% of namespace log volume (eBPF name-resolution chatter, zero
+  atlas signal) and was the cause of the unfiltered-query timeouts.
+  ueransim is **kept** (UE/gNB failure logs are signal).
+- `all.csv` restored. Server-cap patch in `cluster-start.sh` reduced
+  500000 → 50000 (no longer load-bearing — pagination handles it).
+
+### 10.6 Beyla quieted to INFO (`kind/monitoring/beyla-daemonset.yaml`)
+
+- `OTEL_EBPF_LOG_LEVEL` / `BEYLA_LOG_LEVEL`: `DEBUG → INFO`. Removes
+  ~85% of log volume at source. **Beyla metrics & traces are
+  unaffected** (log level does not gate metric/trace emission).
+
+### 10.7 Jaeger trace cap raised (`collect_jaeger.py`)
+
+- Per-service `limit` `2000 → 20000`; request timeout `30 → 120s`.
+  The 2000 cap was truncating SCP (the busiest NF, every inter-NF SBI
+  call) in exactly the SCP-relevant faults. Verify SCP `span_count`
+  is well under 20000 in `summary.json` (not truncated).
+
+### 10.8 Prometheus metrics (`collect_prometheus.py`)
+
+- **Removed** the dead GTP-packet queries
+  (`fivegs_ep_n3_gtp_*datapktn3upf`): they exist in Open5GS 2.7.5
+  source but read **flat zero** in this Gradiant UPF datapath
+  (verified live). Use UPF container `network_rx_bytes_rate` /
+  `network_tx_bytes_rate` as the data-plane traffic signal instead.
+- **Added 10 metrics**: failure counters
+  `smf_pdu_session_fail`, `smf_n4_session_estab_fail`,
+  `upf_n4_session_estab_fail`, `amf_reg_init_fail`, `amf_reg_mob_fail`,
+  `amf_reg_period_fail`, `amf_reg_emerg_fail`; clean session gauges
+  `smf_ues_active`, `smf_bearers_active`, `smf_qos_flow_nbr`. Failure
+  counters are zero-suppressed: empty/absent CSV in a clean phase,
+  populated only when the fault actually induces failures (correct,
+  expected behaviour).
+
+### 10.9 Docker Hub authentication (`cluster-start.sh`, `.gitignore`)
+
+- Recreate-per-fault re-pulls ~10–20 docker.io images each time;
+  unauthenticated Docker Hub = **100 pulls / 6 h / IP** → the batch
+  stalls on `ImagePullBackOff`/`429`.
+- `cluster-start.sh` now injects credentials from a **gitignored**
+  `kind/.dockerhub-auth` (two lines: username, then PAT) into a
+  runtime kind config (`containerdConfigPatches`) before
+  `kind create`. Authenticated = **200 / 6 h**, billed to a separate
+  account bucket (independent of the exhausted per-IP bucket).
+- **Every teammate must create their own** `kind/.dockerhub-auth`
+  (it is gitignored and never committed). Without it the script warns
+  and falls back to unauthenticated. Read-only PAT scope is sufficient.
+
+### 10.10 Known signal caveats (for analysis & the paper)
+
+These are measurement properties of this stack, not bugs to fix —
+state them explicitly in the paper rather than treat as missing data:
+
+- **`upf_session_nbr` / `upf_qos_flows` over-count.** The UPF gauge
+  increments on session add but not on delete, so it climbs within a
+  run (real ≈10 → 25+) while the system is healthy. **Use
+  `pfcp_sessions_active` / `smf_ues_active` / `smf_sessionnbr`** — all
+  three independently track the true count and respond to faults.
+- **GTP N3 packet/volume counters are not exported** by this build —
+  data-plane traffic is observable only via UE RTT + UPF network
+  rx/tx bytes.
+- **`fivegs_amffunction_rm_regtime` (registration latency) is not
+  exported.** AMF CPU/stress faults degrade registration *latency*,
+  but only failure *counters* are collectable, and registrations
+  eventually succeed — so control-plane faults look "resource-metric-
+  only."
+- **The control-plane workload is light.** `traffic.sh` cycles only
+  **3 of 10 UEs** through deregister/register every ~70 s (~24
+  transactions per 300 s fault). Control-plane faults
+  (AMF/AUSF/UDM/registration) are under-stimulated; the atlas may
+  under-report their blast radius. This is a methodology limitation to
+  disclose, or to address by raising re-registration intensity in
+  `traffic.sh` (trades off against PFCP/GTP stability — see the
+  in-file comment).
+- **Non-crash faults are quiet at the orchestration layer** by nature
+  (no pod events unless a liveness probe trips). Chaos Mesh
+  `Applied`/`Recovered` events *are* captured in the `open5gs`
+  namespace and provide ground-truth fault timing; the `chaos-mesh`
+  namespace is not scraped (low priority — `timeline.json` covers
+  timing).

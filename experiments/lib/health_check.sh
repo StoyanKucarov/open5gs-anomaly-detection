@@ -69,7 +69,7 @@ UES_TUNS=$(kubectl exec -n open5gs deployment/ueransim-ues -- \
 UES_TUNS=${UES_TUNS:-0}
 TOTAL_TUNS=$((GNB_UE_TUNS + UES_TUNS))
 
-if [[ "$TOTAL_TUNS" -ge 5 ]]; then
+if [[ "$TOTAL_TUNS" -ge 10 ]]; then
     echo "  [ues]   OK — ${TOTAL_TUNS} tunnels active (gnb-ues=${GNB_UE_TUNS} ueransim-ues=${UES_TUNS})"
 elif [[ "$TOTAL_TUNS" -ge 1 ]]; then
     echo "  [ues]   WARN — only ${TOTAL_TUNS} tunnels active (gnb-ues=${GNB_UE_TUNS} ueransim-ues=${UES_TUNS})"
@@ -135,7 +135,7 @@ fi
 FAILURES=()
 [[ "${#CRITICAL_DOWN[@]}" -gt 0 ]] && FAILURES+=("core NF(s) down: ${CRITICAL_DOWN[*]}")
 [[ "$GNB_CONNECTED" -eq 0 ]]       && FAILURES+=("gNB not connected to AMF")
-[[ "$TOTAL_TUNS" -lt 5 ]]          && FAILURES+=("only ${TOTAL_TUNS} UE tunnels active (need ≥5)")
+[[ "$TOTAL_TUNS" -lt 10 ]]         && FAILURES+=("only ${TOTAL_TUNS} UE tunnels active (need ≥10)")
 [[ "$UDM_SUBS" -gt 0 ]]            && FAILURES+=("UDM subscription overflow")
 
 if [[ "${#FAILURES[@]}" -gt 0 ]]; then
