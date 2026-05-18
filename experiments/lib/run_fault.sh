@@ -109,22 +109,23 @@ UPF_POD=$(kubectl get pod -n open5gs -l app.kubernetes.io/name=upf \
 
 # prints "FLOOD <total> <topteid> <topcount>" or "OK <total>"; exit 0 always
 _dp_check() {
-    kubectl logs -n open5gs "$UPF_POD" --since=20s 2>/dev/null \
-      | python3 - "$DP_FLOOD_MIN" "$DP_FLOOD_FRAC" <<'PYEOF'
+    local lf
+    lf=$(mktemp)
+    kubectl logs -n open5gs "$UPF_POD" --since=20s > "$lf" 2>/dev/null
+    python3 - "$DP_FLOOD_MIN" "$DP_FLOOD_FRAC" "$lf" <<'PYEOF'
 import sys, re, collections
-mn, frac = int(sys.argv[1]), float(sys.argv[2])
+mn, frac, path = int(sys.argv[1]), float(sys.argv[2]), sys.argv[3]
 teid = collections.Counter()
-for ln in sys.stdin:
+for ln in open(path, errors="replace"):
     if "Send Error Indication" in ln:
         m = re.search(r"TEID:0x[0-9a-fA-F]+", ln)
         teid[m.group(0) if m else "?"] += 1
 tot = sum(teid.values())
 top, topc = (teid.most_common(1)[0] if teid else ("-", 0))
-if tot >= mn and topc >= frac * tot:
-    print(f"FLOOD {tot} {top} {topc}")
-else:
-    print(f"OK {tot}")
+print(f"FLOOD {tot} {top} {topc}" if (tot >= mn and topc >= frac * tot)
+      else f"OK {tot}")
 PYEOF
+    rm -f "$lf"
 }
 
 DP_GATE_OK=0
