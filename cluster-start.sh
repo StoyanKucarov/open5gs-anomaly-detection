@@ -209,31 +209,24 @@ else
     [[ "$ue_ok" -eq 1 ]] || { echo "  [gate] FATAL — UEs never established ${UE_COUNT} PDU sessions" >&2; exit 1; }
   fi
 
-  # ── Gate C2: UPF session table agrees with SMF (orphaned-bearer guard) ──────
-  # Gate C only checks the SMF side. An orphaned bearer is exactly an SMF<->UPF
-  # divergence: the SMF has the PDU session (so the UE gets a uesimtun) but the
-  # UPF session table is short, so uplink floods 'Send Error Indication' and
-  # contaminates the PRE baseline (seen in 7/22 prior runs). Assert the UPF side
-  # is also == UE_COUNT *and* matches the SMF count. NOTE: pfcp_sessions_active,
-  # NOT upf_session_nbr (EXTENSIONS.md §10.10 — upf_session_nbr over-counts).
-  upf_ok=0
-  for r in 1 2 3; do
-    if wait_for_metric upf pfcp_sessions_active -ge "$UE_COUNT" 120 "UPF PFCP session table >= ${UE_COUNT}"; then
-      s=$(nf_metric smf pfcp_sessions_active 2>/dev/null || echo 0)
-      u=$(nf_metric upf pfcp_sessions_active 2>/dev/null || echo 0)
-      if [[ "$u" -eq "$s" ]]; then
-        echo "  [gate] OK — SMF/UPF session tables agree (smf=$s upf=$u)"
-        upf_ok=1; break
-      fi
-      echo "  [gate] SMF/UPF divergence (smf=$s upf=$u) — restarting UEs (retry $r/3)..."
-    else
-      echo "  [gate] UPF session table short — restarting UEs (retry $r/3)..."
-    fi
+  # ── Gate C2: UPF session table sanity (orphaned-bearer early warning) ───────
+  # Gate C only checks the SMF side. The UPF does NOT expose pfcp_sessions_active
+  # (SMF-only); its only session metric is fivegs_upffunction_upf_sessionnbr,
+  # which over-counts (EXTENSIONS.md §10.10) — so an exact UPF==SMF check is not
+  # possible here. This is therefore a NON-FATAL best-effort nudge: if the UPF
+  # session table looks short, restart UEs once; never abort the run on it. The
+  # authoritative orphaned-bearer protection is the post-traffic Send-Error-
+  # Indication gate in run_fault.sh plus the tunnels>=10 health check.
+  if ! wait_for_metric upf fivegs_upffunction_upf_sessionnbr -ge "$UE_COUNT" 60 \
+       "UPF session table >= ${UE_COUNT}"; then
+    echo "  [gate] WARN — UPF session table short (one-shot UE restart, non-fatal)"
     kubectl rollout restart deployment/ueransim-gnb-ues deployment/ueransim-ues -n open5gs
     kubectl rollout status  deployment/ueransim-gnb-ues -n open5gs --timeout=120s || true
     kubectl rollout status  deployment/ueransim-ues     -n open5gs --timeout=120s || true
-  done
-  [[ "$upf_ok" -eq 1 ]] || { echo "  [gate] FATAL — UPF/SMF PFCP session tables never converged" >&2; exit 1; }
+    wait_for_metric upf fivegs_upffunction_upf_sessionnbr -ge "$UE_COUNT" 60 \
+       "UPF session table >= ${UE_COUNT} (after restart)" || \
+       echo "  [gate] WARN — UPF still short; deferring to run_fault.sh data-plane gate"
+  fi
 
   helm install loki grafana/loki-stack \
     --namespace monitoring \
