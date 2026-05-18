@@ -94,23 +94,53 @@ start_traffic
 # pfcp_sessions_active>=10). It cannot see this failure: it runs before traffic
 # exists, and the symptom only appears once the ping loop hits a UE whose PDU
 # session was orphaned at bring-up (UPF floods 'Send Error Indication',
-# contaminating the PRE baseline — seen in 7/22 prior runs). So this gate lives
-# here, after start_traffic, where the evidence is observable. Re-attach all
-# UEs once as a clean slate, then require zero such errors for 15s before PRE.
-repair_orphaned_bearers || true
+# contaminating the PRE baseline — seen in 7/22 prior runs).
+#
+# A real orphaned bearer = ONE stuck session pinged at 5/s -> a sustained,
+# single-TEID flood (~100 SEI / 20s, all one TEID). Harmless churn (the 3-UE
+# re-registration loop, or a repair re-attach) = a brief burst spread across
+# several TEIDs. So "dirty" requires BOTH: total >= DP_FLOOD_MIN *and* one TEID
+# >= DP_FLOOD_FRAC of them. We do NOT repair pre-emptively (that itself causes
+# churn); only repair if a flood is seen, and let it settle before re-checking.
+DP_FLOOD_MIN=40       # sustained: >=2 SEI/s over the 20s window
+DP_FLOOD_FRAC=0.70    # single stuck session dominates
+UPF_POD=$(kubectl get pod -n open5gs -l app.kubernetes.io/name=upf \
+              -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+
+# prints "FLOOD <total> <topteid> <topcount>" or "OK <total>"; exit 0 always
+_dp_check() {
+    kubectl logs -n open5gs "$UPF_POD" --since=20s 2>/dev/null \
+      | python3 - "$DP_FLOOD_MIN" "$DP_FLOOD_FRAC" <<'PYEOF'
+import sys, re, collections
+mn, frac = int(sys.argv[1]), float(sys.argv[2])
+teid = collections.Counter()
+for ln in sys.stdin:
+    if "Send Error Indication" in ln:
+        m = re.search(r"TEID:0x[0-9a-fA-F]+", ln)
+        teid[m.group(0) if m else "?"] += 1
+tot = sum(teid.values())
+top, topc = (teid.most_common(1)[0] if teid else ("-", 0))
+if tot >= mn and topc >= frac * tot:
+    print(f"FLOOD {tot} {top} {topc}")
+else:
+    print(f"OK {tot}")
+PYEOF
+}
+
 DP_GATE_OK=0
 for attempt in 1 2 3; do
-    sleep 15
-    UPF_POD=$(kubectl get pod -n open5gs -l app.kubernetes.io/name=upf \
-                  -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
-    n=$(kubectl logs -n open5gs "$UPF_POD" --since=15s 2>/dev/null \
-            | grep -c 'Send Error Indication' || true)
-    if [[ "${n:-0}" -eq 0 ]]; then DP_GATE_OK=1; break; fi
-    echo "[gate] data plane dirty: $n orphaned-bearer error(s) (attempt $attempt/3)"
+    sleep 20
+    res=$(_dp_check)
+    if [[ "$res" == OK* ]]; then
+        echo "[gate] data plane clean ($res) — proceeding"
+        DP_GATE_OK=1; break
+    fi
+    echo "[gate] data plane dirty: $res (attempt $attempt/3) — repairing"
     repair_orphaned_bearers || true
+    sleep 25   # let the re-attach churn drain before re-sampling
 done
 if [[ "$DP_GATE_OK" -ne 1 ]]; then
-    echo "FATAL: orphaned GTP bearer persists after 3 repair attempts;" \
+    echo "FATAL: single-TEID SEI flood persists after 3 repair attempts;" \
          "PRE baseline would be contaminated. Resume with --from N." >&2
     exit 1
 fi
