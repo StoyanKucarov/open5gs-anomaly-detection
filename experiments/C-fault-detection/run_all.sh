@@ -135,6 +135,50 @@ restart_ues() {
     fi
 }
 
+# Full cluster bring-up for one fault: recreate + provision + portforwards +
+# wait for all 10 UE tunnels. Used for the initial per-fault recreate and for
+# the recreate-escalation when the pre-fault health check won't recover.
+bring_up_cluster() {
+    echo "[reset] Full cluster restart..."
+    bash "$SCRIPT_DIR/../../cluster-start.sh"
+    bash "$LIB_DIR/provision_ues.sh" "$UE_COUNT"
+    ensure_portforward_prometheus
+    ensure_portforward_jaeger
+    ensure_portforward_loki
+    echo "  [reset] Waiting for all ${UE_COUNT} gnb-ues tunnels (180s max)..."
+    local gnb_ue_pod_reset tun_count_reset tun_deadline_reset
+    gnb_ue_pod_reset=$(kubectl get pods -n open5gs -l app.kubernetes.io/name=ueransim-gnb \
+        --no-headers 2>/dev/null | grep gnb-ues | awk '{print $1}' | head -1)
+    tun_deadline_reset=$(($(date +%s) + 180))
+    tun_count_reset=0
+    while [[ $(date +%s) -lt $tun_deadline_reset ]]; do
+        if [[ -n "$gnb_ue_pod_reset" ]]; then
+            tun_count_reset=$(kubectl exec -n open5gs "$gnb_ue_pod_reset" -- \
+                ip link show 2>/dev/null | grep -c uesimtun || true)
+        fi
+        [[ "${tun_count_reset:-0}" -ge "$UE_COUNT" ]] && break
+        sleep 5
+    done
+    echo "  [reset] gnb-ues tunnels: ${tun_count_reset:-0}/${UE_COUNT}"
+    local ue_pod
+    ue_pod=$(kubectl get pods -n open5gs -l app.kubernetes.io/component=ues \
+        --no-headers 2>/dev/null | awk '{print $1}' | head -1)
+    if [[ -n "$ue_pod" ]]; then
+        kubectl exec -n open5gs "$ue_pod" -- bash -c '
+            for i in $(seq 0 9); do
+                ip link show uesimtun$i >/dev/null 2>&1 || continue
+                ip route add 10.45.0.1 dev uesimtun$i 2>/dev/null || true
+            done
+        ' 2>/dev/null || true
+        if kubectl exec -n open5gs "$ue_pod" -- \
+                ping -I uesimtun0 -c 1 -W 2 10.45.0.1 >/dev/null 2>&1; then
+            echo "  [reset] Data-plane ready (ping OK via $ue_pod)"
+        else
+            echo "  [reset] WARN — ping not OK yet; health-check retry/recreate will handle it"
+        fi
+    fi
+}
+
 run_fault_experiment() {
     local num="$1" name="$2" manifest="$3"
     if [[ -n "$ONLY" ]] && ! echo ",$ONLY," | grep -q ",$num,"; then
@@ -149,51 +193,34 @@ run_fault_experiment() {
     echo "------------------------------------------------------------"
     echo " Fault $num: $name"
     echo "------------------------------------------------------------"
-    echo "[reset] Full cluster restart before fault $num..."
-    bash "$SCRIPT_DIR/../../cluster-start.sh"
-    bash "$LIB_DIR/provision_ues.sh" "$UE_COUNT"
-    ensure_portforward_prometheus
-    ensure_portforward_jaeger
-    ensure_portforward_loki
-    # cluster-start.sh already set up gnb+ues fresh — wait for tunnels, then verify
-    echo "  [reset] Waiting for gnb-ues tunnels to appear (120s max)..."
-    local gnb_ue_pod_reset tun_count_reset tun_deadline_reset
-    gnb_ue_pod_reset=$(kubectl get pods -n open5gs -l app.kubernetes.io/name=ueransim-gnb \
-        --no-headers 2>/dev/null | grep gnb-ues | awk '{print $1}' | head -1)
-    tun_deadline_reset=$(($(date +%s) + 120))
-    tun_count_reset=0
-    while [[ $(date +%s) -lt $tun_deadline_reset ]]; do
-        if [[ -n "$gnb_ue_pod_reset" ]]; then
-            tun_count_reset=$(kubectl exec -n open5gs "$gnb_ue_pod_reset" -- \
-                ip link show 2>/dev/null | grep -c uesimtun || true)
+    echo "[reset] Bringing up cluster for fault $num..."
+    bring_up_cluster
+    # Pre-fault health gate with escalation: re-check a few times (lets a slow
+    # UE finish attaching), and only if it still won't pass do a full cluster
+    # recreate. Abort the run only after recreates keep failing.
+    local recreate_left=2 health_ok=0
+    while :; do
+        local h
+        for h in 1 2 3; do
+            if bash "$LIB_DIR/health_check.sh" "pre-${name}" \
+                    "$OUT_BASE/${name}/health_pre.json"; then
+                health_ok=1; break
+            fi
+            echo "  [gate] pre-fault health check failed (retry $h/3) —" \
+                 "waiting 30s for UEs to settle..."
+            sleep 30
+        done
+        [[ "$health_ok" -eq 1 ]] && break
+        if [[ "$recreate_left" -le 0 ]]; then
+            echo "[ABORT] health check still failing after recreates for fault $num ($name)" >&2
+            echo "[ABORT] Re-run with: --from $num" >&2
+            exit 1
         fi
-        [[ "${tun_count_reset:-0}" -ge 2 ]] && break
-        sleep 5
+        echo "  [gate] health unrecovered — full cluster recreate" \
+             "(${recreate_left} recreate(s) left)..."
+        recreate_left=$((recreate_left - 1))
+        bring_up_cluster
     done
-    echo "  [reset] gnb-ues tunnels: ${tun_count_reset:-0}"
-    local ue_pod
-    ue_pod=$(kubectl get pods -n open5gs -l app.kubernetes.io/component=ues \
-        --no-headers 2>/dev/null | awk '{print $1}' | head -1)
-    if [[ -n "$ue_pod" ]]; then
-        kubectl exec -n open5gs "$ue_pod" -- bash -c '
-            for i in $(seq 0 9); do
-                ip link show uesimtun$i >/dev/null 2>&1 || continue
-                ip route add 10.45.0.1 dev uesimtun$i 2>/dev/null || true
-            done
-        ' 2>/dev/null || true
-        if ! kubectl exec -n open5gs "$ue_pod" -- \
-                ping -I uesimtun0 -c 1 -W 2 10.45.0.1 >/dev/null 2>&1; then
-            echo "  [reset] Ping failed after cluster-start — running restart_ues() recovery..."
-            restart_ues
-        else
-            echo "  [reset] Data-plane ready (ping OK via $ue_pod)"
-        fi
-    fi
-    if ! bash "$LIB_DIR/health_check.sh" "pre-${name}" "$OUT_BASE/${name}/health_pre.json"; then
-        echo "[ABORT] health check failed after full cluster restart for fault $num ($name)" >&2
-        echo "[ABORT] Re-run with: --from $num" >&2
-        exit 1
-    fi
     bash "$LIB_DIR/run_fault.sh" \
         --name        "$name" \
         --manifest    "$CHAOS_DIR/$manifest" \
