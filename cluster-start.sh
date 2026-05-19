@@ -265,8 +265,33 @@ else
     --set chaosDaemon.runtime=containerd \
     --set chaosDaemon.socketPath=/run/containerd/containerd.sock
 
-  echo "  -> Waiting for Chaos Mesh to be ready..."
-  kubectl rollout status deployment/chaos-controller-manager -n chaos-mesh --timeout=7m
+  # Wait for BOTH the controller-manager AND the chaos-daemon DaemonSet (the
+  # per-node agent that actually injects faults — without it faults silently
+  # do nothing). Poll with a generous deadline: on a slow network the chaos
+  # images take 5-7 min each to pull, which blows a fixed `rollout status
+  # --timeout`; a single timeout there used to abort the whole run.
+  echo "  -> Waiting for Chaos Mesh (controller + daemon; pulls can be slow)..."
+  chaos_deadline=$(($(date +%s) + 1200))   # up to 20 min
+  while :; do
+    cm_ready=$(kubectl get deploy chaos-controller-manager -n chaos-mesh \
+      -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo 0)
+    cd_ready=$(kubectl get ds chaos-daemon -n chaos-mesh \
+      -o jsonpath='{.status.numberReady}' 2>/dev/null || echo 0)
+    cd_want=$(kubectl get ds chaos-daemon -n chaos-mesh \
+      -o jsonpath='{.status.desiredNumberScheduled}' 2>/dev/null || echo 0)
+    if [[ "${cm_ready:-0}" -ge 1 && "${cd_want:-0}" -ge 1 \
+          && "${cd_ready:-0}" -ge "${cd_want:-1}" ]]; then
+      echo "  [gate] OK — Chaos Mesh ready (controller=${cm_ready}, daemon=${cd_ready}/${cd_want})"
+      break
+    fi
+    if [[ $(date +%s) -ge $chaos_deadline ]]; then
+      echo "  [gate] FATAL — Chaos Mesh not ready after 20m" \
+           "(controller=${cm_ready:-0}, daemon=${cd_ready:-0}/${cd_want:-0});" \
+           "faults would not inject. Resume with --from N." >&2
+      exit 1
+    fi
+    sleep 10
+  done
   
   # ── Metrics Server (Required for kubectl top) ──────────────────────────────
   echo "  [4e] Metrics Server..."

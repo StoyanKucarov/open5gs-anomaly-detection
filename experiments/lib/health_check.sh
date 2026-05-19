@@ -102,11 +102,14 @@ if [[ -n "$UE_POD" ]]; then
         | grep -oP 'rtt.*= \K[\d.]+' | cut -d/ -f2 || echo "")
     if [[ -n "$RTT" ]]; then
         echo "  [rtt]   OK — UPF ping avg=${RTT}ms via ${UE_POD}"
+        RTT_OK=1
     else
         echo "  [rtt]   FAIL — ping to UPF (10.45.0.1) lost via ${UE_POD}"
+        RTT_OK=0
     fi
 else
     echo "  [rtt]   SKIP — no UE pod with uesimtun0 found"
+    RTT_OK=0
 fi
 
 echo "  ────────────────────────────────────────────────────"
@@ -137,6 +140,7 @@ FAILURES=()
 [[ "$GNB_CONNECTED" -eq 0 ]]       && FAILURES+=("gNB not connected to AMF")
 [[ "$TOTAL_TUNS" -lt 9 ]]          && FAILURES+=("only ${TOTAL_TUNS} UE tunnels active (need ≥9)")
 [[ "$UDM_SUBS" -gt 0 ]]            && FAILURES+=("UDM subscription overflow")
+[[ "${RTT_OK:-0}" -eq 0 ]]         && FAILURES+=("data-plane ping to UPF (10.45.0.1) failed — baseline would be on a dead data plane")
 
 if [[ "${#FAILURES[@]}" -gt 0 ]]; then
     echo "  [health] CRITICAL: ${FAILURES[*]}" >&2

@@ -160,22 +160,28 @@ bring_up_cluster() {
         sleep 5
     done
     echo "  [reset] gnb-ues tunnels: ${tun_count_reset:-0}/${UE_COUNT}"
-    local ue_pod
-    ue_pod=$(kubectl get pods -n open5gs -l app.kubernetes.io/component=ues \
-        --no-headers 2>/dev/null | awk '{print $1}' | head -1)
-    if [[ -n "$ue_pod" ]]; then
-        kubectl exec -n open5gs "$ue_pod" -- bash -c '
+    # Add the UPF data-plane route on EVERY pod that has uesimtun interfaces.
+    # UEs land on the gnb-ues pod OR the ueransim-ues pod depending on the
+    # recreate; adding the route to only one (old behaviour) leaves the pinging
+    # pod routeless -> RTT fails and the baseline is collected on a dead data
+    # plane. Then ping-test the gnb-ues pod (the one traffic/RTT actually use).
+    local p
+    for p in "$gnb_ue_pod_reset" \
+             $(kubectl get pods -n open5gs -l app.kubernetes.io/component=ues \
+                 --no-headers 2>/dev/null | awk '{print $1}'); do
+        [[ -n "$p" ]] || continue
+        kubectl exec -n open5gs "$p" -- bash -c '
             for i in $(seq 0 9); do
                 ip link show uesimtun$i >/dev/null 2>&1 || continue
                 ip route add 10.45.0.1 dev uesimtun$i 2>/dev/null || true
             done
         ' 2>/dev/null || true
-        if kubectl exec -n open5gs "$ue_pod" -- \
-                ping -I uesimtun0 -c 1 -W 2 10.45.0.1 >/dev/null 2>&1; then
-            echo "  [reset] Data-plane ready (ping OK via $ue_pod)"
-        else
-            echo "  [reset] WARN — ping not OK yet; health-check retry/recreate will handle it"
-        fi
+    done
+    if [[ -n "$gnb_ue_pod_reset" ]] && kubectl exec -n open5gs "$gnb_ue_pod_reset" -- \
+            ping -I uesimtun0 -c 1 -W 2 10.45.0.1 >/dev/null 2>&1; then
+        echo "  [reset] Data-plane ready (ping OK via $gnb_ue_pod_reset)"
+    else
+        echo "  [reset] WARN — data-plane ping not OK; health check will gate it"
     fi
 }
 
