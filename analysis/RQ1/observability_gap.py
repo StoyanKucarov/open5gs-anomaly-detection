@@ -256,9 +256,16 @@ def classify_faults(strength_df: pd.DataFrame) -> pd.DataFrame:
       - ebpf_only:       detected by eBPF signals, not Prometheus
       - both:            detected by both
       - neither:         not clearly detected by either
+
+    Note: ebpf_span_drop is excluded from the eBPF detection score here
+    because span count fluctuates even at baseline (the signal is always
+    non-zero), making it unsuitable for gap classification. It is retained
+    in the heatmap for completeness. Only ebpf_latency_increase and
+    ebpf_error_rate_delta are used for gap classification.
     """
     prom_cols = SIGNAL_GROUPS["Prometheus"]
-    ebpf_cols = SIGNAL_GROUPS["eBPF/Beyla"]
+    # Exclude span_drop from gap classification — it fires at baseline level
+    ebpf_cols_for_gap = ["ebpf_latency_increase", "ebpf_error_rate_delta"]
 
     # Thresholds on normalised scores
     PROM_THRESHOLD = 0.20   # normalised score > 20% of max = "detected"
@@ -269,7 +276,7 @@ def classify_faults(strength_df: pd.DataFrame) -> pd.DataFrame:
     rows = []
     for fault in strength_df.index:
         prom_score = norm_df.loc[fault, prom_cols].max()
-        ebpf_score = norm_df.loc[fault, ebpf_cols].max()
+        ebpf_score = norm_df.loc[fault, ebpf_cols_for_gap].max()
 
         prom_det = bool(prom_score > PROM_THRESHOLD)
         ebpf_det = bool(ebpf_score > EBPF_THRESHOLD)

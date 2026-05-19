@@ -20,7 +20,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../../lib/common.sh"
 
-WINDOW_DURATION=600   # 10 minutes per rate
+WINDOW_DURATION="${WINDOW_DURATION:-600}"   # 10 minutes per rate
 UE_COUNT=50
 STEP="5s"
 
@@ -31,6 +31,9 @@ declare -A RATE_SLUGS=(
     ["0.1"]="sampling-10pct"
 )
 RATES=("1.0" "0.5" "0.1")
+if [[ "${1:-}" == "--rate" && -n "${2:-}" ]]; then
+    RATES=("$2")
+fi
 
 OUT_BASE="$DATA_DIR/02-overhead-ebpf"
 
@@ -40,14 +43,6 @@ echo "============================================================"
 
 check_cluster_ready
 
-echo "[setup] Provisioning $UE_COUNT subscribers..."
-bash "$LIB_DIR/provision_ues.sh" "$UE_COUNT"
-scale_ues "$UE_COUNT"
-wait_for_pods_stable open5gs 120
-
-ensure_portforward_prometheus
-ensure_portforward_jaeger
-
 for RATE in "${RATES[@]}"; do
     SLUG="${RATE_SLUGS[$RATE]}"
     OUT_DIR="$OUT_BASE/$SLUG"
@@ -55,6 +50,26 @@ for RATE in "${RATES[@]}"; do
 
     echo ""
     echo "--- Sampling rate: $RATE ($SLUG) ---"
+
+    # Full cluster reset before each sampling rate so Beyla's internal trace
+    # buffer, GTP state, and UE tunnel state from the previous rate cannot
+    # bleed into the next measurement window.
+    echo "[reset] Full cluster reset before $SLUG..."
+    bash "$SCRIPT_DIR/../../../cluster-start.sh"
+    bash "$LIB_DIR/provision_ues.sh" "$UE_COUNT"
+
+    scale_ues "$UE_COUNT"
+    wait_for_pods_stable open5gs 120
+    wait_for_ue_sessions "$UE_COUNT" 240
+
+    ensure_portforward_prometheus
+    ensure_portforward_jaeger
+
+    if ! bash "$LIB_DIR/health_check.sh" "pre-ebpf-$SLUG" "$OUT_DIR/health_pre.json"; then
+        echo "[ABORT] cluster not healthy before $SLUG" >&2
+        exit 1
+    fi
+
     log_experiment_start "02-overhead-ebpf-$SLUG" "$OUT_DIR"
 
     # Patch Beyla sampling rate via env var
@@ -104,11 +119,6 @@ with open('$OUT_DIR/rate_meta.json', 'w') as f:
 "
     log_experiment_end "$OUT_DIR"
     echo "[done] $SLUG complete → $OUT_DIR"
-
-    if [[ "$RATE" != "${RATES[-1]}" ]]; then
-        echo "[cooldown] 60s between rates..."
-        sleep 60
-    fi
 done
 
 # Restore Beyla to always_on sampling

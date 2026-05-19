@@ -14,7 +14,7 @@ import numpy as np
 import pandas as pd
 
 from config import (
-    BASELINE_DIR, PROM_OVERHEAD_DIR, EBPF_OVERHEAD_DIR,
+    BASELINE_DIR, PROM_OVERHEAD_DIR, EBPF_OVERHEAD_DIR, BOTH_OVERHEAD_DIR,
     FAULT_DIR, SCALABILITY_DIR, ALL_FAULTS,
     PROM_INTERVALS, EBPF_SAMPLING_RATES, SCALABILITY_SCENARIOS,
 )
@@ -238,6 +238,37 @@ def load_all_ebpf_overhead() -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Both stacks overhead (A-05)
+# ---------------------------------------------------------------------------
+
+def load_both_overhead() -> dict:
+    """
+    Load data for the combined Prometheus + Beyla overhead experiment.
+
+    Returns
+    -------
+    dict with keys:
+        'prometheus'    : dict of DataFrames (all standard metrics)
+        'beyla_cpu'     : DataFrame
+        'beyla_mem'     : DataFrame
+        'jaeger_spans'  : DataFrame
+        'jaeger_summary': dict
+        'meta'          : dict
+    """
+    base = BOTH_OVERHEAD_DIR
+    prom = load_all_prometheus(base)
+    jaeger_dir = base / "jaeger"
+    return {
+        "prometheus":    prom,
+        "beyla_cpu":     load_prometheus_csv(base, "beyla_cpu_usage_rate.csv"),
+        "beyla_mem":     load_prometheus_csv(base, "beyla_memory_working_set.csv"),
+        "jaeger_spans":  _read_csv(jaeger_dir / "spans_flat.csv"),
+        "jaeger_summary": _read_json(jaeger_dir / "summary.json"),
+        "meta":          _read_json(base / "both_meta.json"),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Scalability (A-04)
 # ---------------------------------------------------------------------------
 
@@ -311,6 +342,7 @@ def load_fault_phase(fault_name: str, phase: str) -> dict:
     loki_dir = base / "loki" / phase
     events_dir = base / "events" / phase
     nrf_dir = base / "nrf" / phase
+
 
     loki = {
         "all":           _read_csv(loki_dir / "all.csv"),

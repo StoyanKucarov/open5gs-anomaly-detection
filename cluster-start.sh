@@ -146,9 +146,15 @@ else
   # ── Gate A: SMF↔UPF PFCP association up before bringing up the RAN ──────────
   # helm --wait only guarantees pod-Ready, not that the N4/PFCP control plane
   # is established. Starting the gNB/UEs before this is the root of the race.
-  if ! wait_for_metric upf pfcp_peers_active -ge 1 240 "SMF↔UPF PFCP association"; then
-    echo "  [gate] FATAL — core PFCP control plane never came up" >&2
-    exit 1
+  if ! wait_for_metric upf pfcp_peers_active -ge 1 360 "SMF↔UPF PFCP association"; then
+    echo "  [gate] PFCP not up after 360s — restarting SMF+UPF once..."
+    kubectl rollout restart deployment/open5gs-smf deployment/open5gs-upf -n open5gs 2>/dev/null || true
+    kubectl rollout status  deployment/open5gs-smf -n open5gs --timeout=120s 2>/dev/null || true
+    kubectl rollout status  deployment/open5gs-upf -n open5gs --timeout=120s 2>/dev/null || true
+    if ! wait_for_metric upf pfcp_peers_active -ge 1 240 "SMF↔UPF PFCP association (retry)"; then
+      echo "  [gate] FATAL — core PFCP control plane never came up" >&2
+      exit 1
+    fi
   fi
 
   # ── UERANSIM ───────────────────────────────────────────────────────────────
@@ -254,6 +260,7 @@ else
     --namespace monitoring \
     --set allInOne.enabled=true \
     --set storage.type=memory \
+    --set allInOne.args[0]="--memory.max-traces=100000" \
     --set agent.enabled=false --set collector.enabled=false --set query.enabled=false \
     --timeout=5m
 

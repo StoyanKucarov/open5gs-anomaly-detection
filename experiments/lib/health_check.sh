@@ -61,13 +61,24 @@ else
 fi
 
 # ── 3. UE tunnel count ─────────────────────────────────────────────────────
-GNB_UE_TUNS=$(kubectl exec -n open5gs deployment/ueransim-gnb-ues -- \
-    ip link show 2>/dev/null | { grep -c uesimtun || true; })
-GNB_UE_TUNS=${GNB_UE_TUNS:-0}
-UES_TUNS=$(kubectl exec -n open5gs deployment/ueransim-ues -- \
-    ip link show 2>/dev/null | { grep -c uesimtun || true; })
-UES_TUNS=${UES_TUNS:-0}
-TOTAL_TUNS=$((GNB_UE_TUNS + UES_TUNS))
+# UEs need time after pod Running to complete 5G registration + PDU session.
+# Poll up to 240s so a slow-starting cluster (e.g. 100+ UEs after restart) doesn't cause a false abort.
+echo -n "  [ues]   waiting for tunnels"
+_tun_deadline=$(( $(date +%s) + 240 ))
+while true; do
+    GNB_UE_TUNS=$(kubectl exec -n open5gs deployment/ueransim-gnb-ues -- \
+        ip link show 2>/dev/null | { grep -c uesimtun || true; })
+    GNB_UE_TUNS=${GNB_UE_TUNS:-0}
+    UES_TUNS=$(kubectl exec -n open5gs deployment/ueransim-ues -- \
+        ip link show 2>/dev/null | { grep -c uesimtun || true; })
+    UES_TUNS=${UES_TUNS:-0}
+    TOTAL_TUNS=$((GNB_UE_TUNS + UES_TUNS))
+    [[ "$TOTAL_TUNS" -ge 5 ]] && break
+    [[ $(date +%s) -ge $_tun_deadline ]] && break
+    echo -n "."
+    sleep 5
+done
+echo ""
 
 if [[ "$TOTAL_TUNS" -ge 9 ]]; then
     echo "  [ues]   OK — ${TOTAL_TUNS} tunnels active (gnb-ues=${GNB_UE_TUNS} ueransim-ues=${UES_TUNS})"
@@ -81,7 +92,7 @@ fi
 UDM_SUBS=$(kubectl logs -n open5gs deployment/open5gs-udm --tail=500 2>/dev/null \
     | { grep -c "Maximum number of SDM Subscriptions" || true; })
 if [[ "$UDM_SUBS" -gt 0 ]]; then
-    echo "  [udm]   FAIL — SDM subscription limit hit ${UDM_SUBS} time(s) in recent logs"
+    echo "  [udm]   WARN — SDM subscription limit hit ${UDM_SUBS} time(s) in recent logs (transient during registration burst)"
 else
     echo "  [udm]   OK — no SDM subscription overflow in recent logs"
 fi
@@ -138,7 +149,7 @@ fi
 FAILURES=()
 [[ "${#CRITICAL_DOWN[@]}" -gt 0 ]] && FAILURES+=("core NF(s) down: ${CRITICAL_DOWN[*]}")
 [[ "$GNB_CONNECTED" -eq 0 ]]       && FAILURES+=("gNB not connected to AMF")
-[[ "$TOTAL_TUNS" -lt 9 ]]          && FAILURES+=("only ${TOTAL_TUNS} UE tunnels active (need ≥9)")
+[[ "$TOTAL_TUNS" -lt 10 ]]          && FAILURES+=("only ${TOTAL_TUNS} UE tunnels active (need ≥10)")
 [[ "$UDM_SUBS" -gt 0 ]]            && FAILURES+=("UDM subscription overflow")
 [[ "${RTT_OK:-0}" -eq 0 ]]         && FAILURES+=("data-plane ping to UPF (10.45.0.1) failed — baseline would be on a dead data plane")
 

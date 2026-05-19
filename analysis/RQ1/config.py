@@ -9,7 +9,7 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
-REPO_ROOT = Path(__file__).parent.parent
+REPO_ROOT = Path(__file__).parent.parent.parent
 DATA_ROOT = REPO_ROOT / "data" / "experiments"
 FIGURES_DIR = REPO_ROOT / "analysis" / "RQ1" / "figures"
 TABLES_DIR = REPO_ROOT / "analysis" / "RQ1" / "tables"
@@ -23,7 +23,8 @@ TABLES_DIR.mkdir(parents=True, exist_ok=True)
 BASELINE_DIR = DATA_ROOT / "00-baseline"
 PROM_OVERHEAD_DIR = DATA_ROOT / "01-overhead-prometheus"
 EBPF_OVERHEAD_DIR = DATA_ROOT / "02-overhead-ebpf"
-FAULT_DIR = DATA_ROOT / "03-fault-detection"
+BOTH_OVERHEAD_DIR = DATA_ROOT / "03-overhead-both"
+FAULT_DIR = REPO_ROOT / "data" / "C-fault-detection"
 SCALABILITY_DIR = DATA_ROOT / "04-scalability"
 
 # ---------------------------------------------------------------------------

@@ -30,6 +30,7 @@ from load_data import (
     load_baseline_top,
     load_prometheus_overhead,
     load_ebpf_overhead,
+    load_both_overhead,
     mean_cpu_millicores, mean_memory_mib,
     beyla_mean_cpu_millicores, beyla_mean_memory_mib,
     monitoring_mean_cpu_millicores, monitoring_mean_memory_mib,
@@ -48,6 +49,8 @@ def _nf_pods_only(series: pd.Series) -> pd.Series:
         "open5gs-nssf", "open5gs-pcf", "open5gs-scp", "open5gs-smf",
         "open5gs-udm", "open5gs-udr", "open5gs-upf",
     )
+    if series.empty or not pd.api.types.is_string_dtype(series.index):
+        return series.iloc[0:0]
     mask = series.index.str.startswith(nf_prefixes)
     return series[mask]
 
@@ -126,15 +129,17 @@ def build_summary() -> pd.DataFrame:
     })
 
     # --- Both stacks active (eBPF 100% + Prometheus 5s) ---
-    # Use the eBPF 100% dataset which has both stacks running
+    # Use the dedicated both-stacks experiment where both run simultaneously
+    both_data = load_both_overhead()
+    both = both_data["prometheus"]
     rows.append({
         "condition": "Both stacks\n(Prom 5s + eBPF 100%)",
-        "nf_cpu_m": mean_cpu_millicores(ebpf),
-        "nf_mem_mib": mean_memory_mib(ebpf),
-        "monitoring_cpu_m": monitoring_mean_cpu_millicores(ebpf),
-        "monitoring_mem_mib": monitoring_mean_memory_mib(ebpf),
-        "beyla_cpu_m": beyla_mean_cpu_millicores(ebpf),
-        "beyla_mem_mib": beyla_mean_memory_mib(ebpf),
+        "nf_cpu_m": mean_cpu_millicores(both),
+        "nf_mem_mib": mean_memory_mib(both),
+        "monitoring_cpu_m": monitoring_mean_cpu_millicores(both),
+        "monitoring_mem_mib": monitoring_mean_memory_mib(both),
+        "beyla_cpu_m": beyla_mean_cpu_millicores(both),
+        "beyla_mem_mib": beyla_mean_memory_mib(both),
     })
 
     return pd.DataFrame(rows)

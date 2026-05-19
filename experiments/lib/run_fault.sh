@@ -164,6 +164,12 @@ collect_phase() {
     collect_nrf                                "$OUT_DIR/nrf/$phase"
 }
 
+# collect_nrf_early: take NRF snapshot immediately (used right after fault injection)
+collect_nrf_early() {
+    local phase="$1"
+    collect_nrf "$OUT_DIR/nrf/${phase}-early"
+}
+
 # ---------------------------------------------------------------------------
 # PRE window
 # ---------------------------------------------------------------------------
@@ -213,6 +219,10 @@ FAULT_START=$(now_ts)
 
 echo "[fault] during_fault hook (background)..."
 during_fault
+
+# Snapshot NRF immediately after injection — NRF pod recovers within the fault
+# window so an end-of-window snapshot always shows normal counts (Bug 6).
+collect_nrf_early "during"
 
 # Start UE-side RTT collection in background for the fault window
 UE_RTT_FILE="$OUT_DIR/rtt/during/ue_rtt.csv"

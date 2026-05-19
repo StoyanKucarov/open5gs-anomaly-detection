@@ -24,8 +24,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../../lib/common.sh"
 
-STEADY_DURATION=600   # 10 minutes
-BURSTY_DURATION=600   # 10 minutes
+STEADY_DURATION="${STEADY_DURATION:-600}"   # 10 minutes
+BURSTY_DURATION="${BURSTY_DURATION:-600}"   # 10 minutes
 SAMPLE_INTERVAL=10    # kubectl top every 10s
 UE_COUNT=50
 
@@ -45,9 +45,10 @@ echo "============================================================"
 check_cluster_ready
 
 # ---------------------------------------------------------------------------
-# Provision subscribers
+# Full cluster reset to start from a clean known state
 # ---------------------------------------------------------------------------
-echo "[setup] Provisioning $UE_COUNT subscribers..."
+echo "[setup] Full cluster reset before baseline..."
+bash "$SCRIPT_DIR/../../../cluster-start.sh"
 bash "$LIB_DIR/provision_ues.sh" "$UE_COUNT"
 
 # ---------------------------------------------------------------------------
@@ -63,7 +64,7 @@ kubectl patch daemonset beyla -n open5gs \
 echo "[setup] Observability scaled down"
 
 # ---------------------------------------------------------------------------
-# Scale UEs
+# Scale UEs and verify cluster health before measuring
 # ---------------------------------------------------------------------------
 scale_ues "$UE_COUNT"
 wait_for_pods_stable open5gs 120
@@ -121,6 +122,10 @@ EOF
 if ! $SKIP_STEADY; then
     echo ""
     echo "--- Steady-state window (${STEADY_DURATION}s) ---"
+    if ! bash "$LIB_DIR/health_check.sh" "pre-baseline-steady" "$OUT_BASE/steady/health_pre.json"; then
+        echo "[ABORT] cluster not healthy before steady-state baseline" >&2
+        exit 1
+    fi
     log_experiment_start "00-baseline-steady" "$OUT_BASE/steady"
     collect_top_snapshots "$OUT_BASE/steady/prometheus" "$STEADY_DURATION" "steady"
     log_experiment_end "$OUT_BASE/steady"
@@ -133,6 +138,27 @@ fi
 if ! $SKIP_BURSTY; then
     echo ""
     echo "--- Bursty window (${BURSTY_DURATION}s) ---"
+
+    # Full cluster reset before bursty window so it starts from the same clean
+    # state as steady — prevents residual GTP/UE state from skewing the measurement.
+    echo "[reset] Full cluster reset before bursty window..."
+    bash "$SCRIPT_DIR/../../../cluster-start.sh"
+    bash "$LIB_DIR/provision_ues.sh" "$UE_COUNT"
+    # Re-disable observability after cluster-start restored it
+    kubectl scale statefulset -n monitoring \
+        prometheus-kube-prom-kube-prometheus-prometheus --replicas=0 2>/dev/null || true
+    kubectl patch daemonset beyla -n open5gs \
+        --type=json \
+        -p='[{"op":"add","path":"/spec/template/spec/nodeSelector","value":{"non-existing":"true"}}]' \
+        2>/dev/null || true
+    scale_ues "$UE_COUNT"
+    wait_for_pods_stable open5gs 120
+
+    if ! bash "$LIB_DIR/health_check.sh" "pre-baseline-bursty" "$OUT_BASE/bursty/health_pre.json"; then
+        echo "[ABORT] cluster not healthy before bursty baseline" >&2
+        exit 1
+    fi
+
     echo "[bursty] Simulating bursty traffic via UE scale up/down cycles..."
     log_experiment_start "00-baseline-bursty" "$OUT_BASE/bursty"
 

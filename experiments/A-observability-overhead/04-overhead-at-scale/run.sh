@@ -20,7 +20,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../../lib/common.sh"
 
-WINDOW_DURATION=600   # 10 minutes per scenario
+WINDOW_DURATION="${WINDOW_DURATION:-600}"   # 10 minutes per scenario
 STEP="5s"
 
 OUT_BASE="$DATA_DIR/04-scalability"
@@ -31,9 +31,6 @@ echo "============================================================"
 
 check_cluster_ready
 
-ensure_portforward_prometheus
-ensure_portforward_jaeger
-
 run_scenario() {
     local ue_count="$1" pattern="$2"
     local slug="ues-${ue_count}-${pattern}"
@@ -42,12 +39,35 @@ run_scenario() {
 
     echo ""
     echo "--- Scenario: $slug ---"
-    log_experiment_start "04-scalability-$slug" "$out_dir"
 
-    echo "[setup] Provisioning $ue_count subscribers..."
+    # Skip if already completed
+    if [[ -f "$out_dir/meta.json" ]]; then
+        echo "[skip] $slug already complete — skipping"
+        return 0
+    fi
+
+    # Full cluster reset before each scenario so UE tunnel state, Beyla trace
+    # buffers, and Prometheus TSDB from the previous scenario cannot skew readings.
+    echo "[reset] Full cluster reset before $slug..."
+    bash "$SCRIPT_DIR/../../../cluster-start.sh"
     bash "$LIB_DIR/provision_ues.sh" "$ue_count"
+
     scale_ues "$ue_count"
     wait_for_pods_stable open5gs 120
+    if ! wait_for_ue_sessions "$ue_count" 240; then
+        echo "[SKIP] $slug — cluster could not establish $ue_count UE sessions; skipping scenario" >&2
+        return 0
+    fi
+
+    ensure_portforward_prometheus
+    ensure_portforward_jaeger
+
+    if ! bash "$LIB_DIR/health_check.sh" "pre-scalability-$slug" "$out_dir/health_pre.json"; then
+        echo "[SKIP] $slug — cluster not healthy before scenario; skipping" >&2
+        return 0
+    fi
+
+    log_experiment_start "04-scalability-$slug" "$out_dir"
 
     echo "[wait] Stabilising for 30s..."
     sleep 30
@@ -113,9 +133,6 @@ with open('$out_dir/scenario_meta.json', 'w') as f:
 "
     log_experiment_end "$out_dir"
     echo "[done] $slug complete → $out_dir"
-
-    echo "[cooldown] 60s between scenarios..."
-    sleep 60
 }
 
 # Steady-state scenarios

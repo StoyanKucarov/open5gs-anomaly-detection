@@ -32,6 +32,7 @@ run_phase 1 "No-telemetry baseline"  "$SCRIPT_DIR/01-no-telemetry-baseline/run.s
 run_phase 2 "Prometheus overhead"    "$SCRIPT_DIR/02-prometheus-overhead/run.sh"
 run_phase 3 "eBPF/Beyla overhead"    "$SCRIPT_DIR/03-ebpf-overhead/run.sh"
 run_phase 4 "Overhead at scale"      "$SCRIPT_DIR/04-overhead-at-scale/run.sh"
+run_phase 5 "Both stacks overhead"   "$SCRIPT_DIR/05-both-stacks-overhead/run.sh"
 
 echo ""
 echo "============================================================"

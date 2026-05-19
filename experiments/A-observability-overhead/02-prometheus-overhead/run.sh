@@ -19,7 +19,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/../../lib/common.sh"
 
-WINDOW_DURATION=600   # 10 minutes per interval
+WINDOW_DURATION="${WINDOW_DURATION:-600}"   # 10 minutes per interval
 UE_COUNT=50
 STEP="5s"
 
@@ -37,20 +37,6 @@ echo "============================================================"
 
 check_cluster_ready
 
-# Disable Beyla to isolate Prometheus overhead
-echo "[setup] Disabling Beyla to isolate Prometheus overhead..."
-kubectl patch daemonset beyla -n open5gs \
-    --type=json \
-    -p='[{"op":"add","path":"/spec/template/spec/nodeSelector","value":{"non-existing":"true"}}]' \
-    2>/dev/null || true
-
-echo "[setup] Provisioning $UE_COUNT subscribers..."
-bash "$LIB_DIR/provision_ues.sh" "$UE_COUNT"
-scale_ues "$UE_COUNT"
-wait_for_pods_stable open5gs 120
-
-ensure_portforward_prometheus
-
 for INTERVAL in "${INTERVALS[@]}"; do
     SLUG="interval-${INTERVAL}"
     OUT_DIR="$OUT_BASE/$SLUG"
@@ -58,6 +44,31 @@ for INTERVAL in "${INTERVALS[@]}"; do
 
     echo ""
     echo "--- Interval: $INTERVAL ---"
+
+    # Full cluster reset before each interval so residual Prometheus TSDB state,
+    # WAL backlog, or UE tunnel state from the previous interval cannot skew readings.
+    echo "[reset] Full cluster reset before interval $INTERVAL..."
+    bash "$SCRIPT_DIR/../../../cluster-start.sh"
+    bash "$LIB_DIR/provision_ues.sh" "$UE_COUNT"
+
+    # Disable Beyla to isolate Prometheus overhead
+    echo "[setup] Disabling Beyla to isolate Prometheus overhead..."
+    kubectl patch daemonset beyla -n open5gs \
+        --type=json \
+        -p='[{"op":"add","path":"/spec/template/spec/nodeSelector","value":{"non-existing":"true"}}]' \
+        2>/dev/null || true
+
+    scale_ues "$UE_COUNT"
+    wait_for_pods_stable open5gs 120
+    wait_for_ue_sessions "$UE_COUNT" 240
+
+    ensure_portforward_prometheus
+
+    if ! bash "$LIB_DIR/health_check.sh" "pre-prometheus-$SLUG" "$OUT_DIR/health_pre.json"; then
+        echo "[ABORT] cluster not healthy before interval $INTERVAL" >&2
+        exit 1
+    fi
+
     log_experiment_start "01-overhead-prometheus-$SLUG" "$OUT_DIR"
 
     set_prometheus_scrape_interval "$INTERVAL"
@@ -99,11 +110,6 @@ with open('$OUT_DIR/interval_meta.json', 'w') as f:
 "
     log_experiment_end "$OUT_DIR"
     echo "[done] Interval $INTERVAL complete → $OUT_DIR"
-
-    if [[ "$INTERVAL" != "${INTERVALS[-1]}" ]]; then
-        echo "[cooldown] 60s between intervals..."
-        sleep 60
-    fi
 done
 
 # Restore

@@ -224,19 +224,88 @@ wait_for_pods_stable() {
 scale_ues() {
     local count="$1"
     echo "[ues] Scaling UERANSIM UEs to $count..."
-    helm upgrade ueransim-ues oci://registry-1.docker.io/gradiant/ueransim-ues \
-        --version 0.1.2 \
+    # Scale the gnb-ues combined deployment (primary UE source)
+    helm upgrade ueransim-gnb oci://registry-1.docker.io/gradiant/ueransim-gnb \
+        --version 0.2.6 \
         --namespace open5gs \
         --reuse-values \
         --set ues.count="$count" \
         --wait --timeout=3m 2>/dev/null || \
-    helm upgrade ueransim-ues oci://registry-1.docker.io/gradiant/ueransim-ues \
-        --version 0.1.2 \
+    helm upgrade ueransim-gnb oci://registry-1.docker.io/gradiant/ueransim-gnb \
+        --version 0.2.6 \
         --namespace open5gs \
         --values https://gradiant.github.io/5g-charts/docs/open5gs-ueransim-gnb/gnb-ues-values.yaml \
         --set ues.count="$count" \
         --wait --timeout=3m
+    kubectl rollout restart deployment/ueransim-gnb-ues -n open5gs 2>/dev/null || true
+    kubectl rollout status  deployment/ueransim-gnb-ues -n open5gs --timeout=120s 2>/dev/null || true
     echo "[ues] Scaled to $count UEs"
+}
+
+# wait_for_ue_sessions <count> [timeout_s]
+# Polls the SMF's own /metrics endpoint until pfcp_sessions_active >= count.
+# If sessions don't appear within timeout, restarts UPF+SMF once and retries.
+wait_for_ue_sessions() {
+    local target="${1:-10}" timeout="${2:-240}"
+    local deadline=$(( $(date +%s) + timeout ))
+    echo -n "  [wait] Waiting for ${target} UE PDU sessions"
+
+    _smf_sessions() {
+        local pod ip
+        pod=$(kubectl get pods -n open5gs --no-headers 2>/dev/null \
+            | grep "open5gs-smf-" | grep " Running " | awk '{print $1}' | head -1)
+        [[ -z "$pod" ]] && echo 0 && return
+        ip=$(kubectl get pod -n open5gs "$pod" -o jsonpath='{.status.podIP}' 2>/dev/null)
+        [[ -z "$ip" ]] && echo 0 && return
+        kubectl exec -n open5gs "$pod" -c "open5gs-smf" -- \
+            curl -s --max-time 5 "${ip}:9090/metrics" 2>/dev/null \
+            | awk '$1=="pfcp_sessions_active"{s+=$2} END{print int(s+0)}'
+    }
+
+    local restarted=0
+    while [[ $(date +%s) -lt $deadline ]]; do
+        local val
+        val=$(_smf_sessions)
+        if [[ "$val" -ge "$target" ]]; then
+            echo " OK (${val} sessions)"
+            return 0
+        fi
+        # If halfway through timeout and still 0, restart UPF to clear PFCP state
+        if [[ "$restarted" -eq 0 && $(date +%s) -ge $(( deadline - timeout/2 )) && "$val" -eq 0 ]]; then
+            echo ""
+            echo "  [wait] No sessions after $((timeout/2))s — restarting UPF to clear PFCP state..."
+            kubectl rollout restart deployment/open5gs-upf -n open5gs 2>/dev/null || true
+            kubectl rollout status  deployment/open5gs-upf -n open5gs --timeout=60s 2>/dev/null || true
+            restarted=1
+            echo -n "  [wait] Retrying"
+        fi
+        echo -n "."
+        sleep 5
+    done
+    # First timeout: restart gnb-ues and give another 120s
+    echo ""
+    echo "  [wait] Timeout — restarting ueransim-gnb-ues and retrying..."
+    kubectl rollout restart deployment/ueransim-gnb-ues -n open5gs 2>/dev/null || true
+    kubectl rollout status  deployment/ueransim-gnb-ues -n open5gs --timeout=120s 2>/dev/null || true
+    local deadline2=$(( $(date +%s) + 120 ))
+    echo -n "  [wait] Retry"
+    while [[ $(date +%s) -lt $deadline2 ]]; do
+        val=$(_smf_sessions)
+        if [[ "$val" -ge "$target" ]]; then
+            echo " OK (${val} sessions after retry)"
+            return 0
+        fi
+        echo -n "."
+        sleep 5
+    done
+    # Accept ≥80% of target as close-enough
+    local grace=$(( target * 8 / 10 ))
+    if [[ "${val:-0}" -ge "$grace" ]]; then
+        echo " WARN — only ${val}/${target} sessions, continuing (≥80% threshold)" >&2
+        return 0
+    fi
+    echo " TIMEOUT (${val:-0}/${target} sessions after extended wait)" >&2
+    return 1
 }
 
 # ---------------------------------------------------------------------------
