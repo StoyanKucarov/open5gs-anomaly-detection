@@ -87,6 +87,10 @@ fi
 kind create cluster --config "$KIND_EFFECTIVE"
 echo "  -> Cluster created"
 kubectl get nodes
+# Load cached workload images from host docker into the fresh node BEFORE any
+# helm/kubectl install, so a slow network can't break the bring-up (no-op on
+# the very first run, before a snapshot exists).
+bash "$SCRIPT_DIR/kind/preload-images.sh" load "$CLUSTER" || true
 
 # --- 3. Raise inotify limits (required for Promtail + Chaos Mesh controller) --
 echo "[3/5] Checking inotify limits..."
@@ -311,6 +315,10 @@ echo "  monitoring pods:"
 kubectl get pods -n monitoring
 echo "  chaos-mesh pods:"
 kubectl get pods -n chaos-mesh
+
+# Snapshot the now-healthy image set + cache it in host docker so every
+# subsequent recreate can load it offline instead of re-pulling.
+bash "$SCRIPT_DIR/kind/preload-images.sh" snapshot "$CLUSTER" || true
 
 echo ""
 echo "Cluster ready."

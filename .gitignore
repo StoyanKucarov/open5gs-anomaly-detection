@@ -8,3 +8,6 @@ __pycache__/
 
 # run logs
 run_all_*.log
+
+# generated image manifest
+kind/preload-images.txt
