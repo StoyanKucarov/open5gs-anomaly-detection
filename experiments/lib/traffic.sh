@@ -52,20 +52,29 @@ start_traffic() {
     fi
     echo "[traffic] UE pod: $UE_POD"
 
-    # 1. Data plane: continuous pings via every available uesimtun to the UPF
-    # ogstun gateway (10.45.0.1). 5 pings/s per tunnel to generate enough GTP
-    # traffic for PFCP modification signals to be visible.
+    # 1. Data plane: continuous pings, 5/s per tunnel, to the UPF ogstun
+    # gateway (10.45.0.1) — enough GTP traffic for PFCP signals to show.
+    # IMPORTANT: ping ONLY the 7 stable UEs (uesimtun 0,1,5,6,7,8,9). The 3
+    # UEs the control-plane loop deregisters/re-registers (imsi-…003/004/005 =
+    # uesimtun 2,3,4) are deliberately EXCLUDED: a re-register that brings the
+    # tunnel back up before its UPF PFCP session re-establishes is an orphaned
+    # bearer; pinging it would flood 'Send Error Indication' for the rest of
+    # the PRE window and contaminate the baseline (the 7/22 contamination).
+    # Not pinging the churned UEs makes that contamination structurally
+    # impossible. Keep this index set disjoint from the control-plane UEs below.
     kubectl exec -n open5gs "$UE_POD" -- bash -c '
-        for i in $(seq 0 9); do
+        for i in 0 1 5 6 7 8 9; do
             ip link show uesimtun$i >/dev/null 2>&1 && \
                 ping -i 0.2 -W 1 -I uesimtun$i 10.45.0.1 >/dev/null 2>&1 &
         done
         wait
     ' >/dev/null 2>&1 &
-    echo "[traffic] data-plane pings started"
+    echo "[traffic] data-plane pings started (stable UEs uesimtun 0,1,5-9)"
 
-    # 2. Control plane: cycle 3 UEs through deregister/register every 60s.
-    # Generates enough AMF/AUSF/UDM/NRF signal without overwhelming GTP state.
+    # 2. Control plane: cycle 3 UEs (imsi-…003/004/005 = uesimtun 2,3,4, which
+    # the data-plane loop above deliberately does NOT ping) through
+    # deregister/register every ~70s. Generates AMF/AUSF/UDM/NRF signal without
+    # its churn ever producing a pinged orphaned bearer.
     (
         UEs=("imsi-999700000000003" "imsi-999700000000004" "imsi-999700000000005")
         while true; do
