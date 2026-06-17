@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 GAL-MAD: GAT + BiLSTM encoder-decoder over sequences of 30-s trace windows.
-Attanayake et al., arXiv 2504.00058. Uses static 3GPP NF topology (no call chain data).
+Uses static 3GPP NF topology (no call chain data).
 W=8 consecutive windows (4 min) per sequence, anomaly score = reconstruction MSE.
 """
 
@@ -33,8 +33,6 @@ D_NODE   = 4                     # per-service features in TraceRecord.values
 
 _SVC_BASE = {s: i * 4 for i, s in enumerate(SERVICES)}
 
-# 3GPP NF reference topology — bidirectional edges + self-loops
-# Services: amf=0 ausf=1 bsf=2 nrf=3 nssf=4 pcf=5 scp=6 sepp=7 smf=8 udr=9 udm=10
 _EDGES = [
     (i, i) for i in range(N_NODES)          # self-loops
 ] + [
@@ -77,10 +75,7 @@ def _node_features(record: TraceRecord) -> np.ndarray:
 def _make_sequences(records: list[TraceRecord],
                     W: int, mu: np.ndarray,
                     std: np.ndarray) -> tuple["torch.Tensor", "torch.Tensor"]:
-    """
-    Slide window of W consecutive records per experiment slug.
-    Returns (X_seqs, labels) tensors shaped (n_seq, W, N, D) and (n_seq,).
-    """
+  
     by_slug: dict[str, list[TraceRecord]] = defaultdict(list)
     for r in records:
         by_slug[r.slug].append(r)
