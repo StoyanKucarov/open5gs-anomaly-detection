@@ -1,71 +1,64 @@
-# Cloud-Native 5G Fault Injection — Reproduction Pack
+# Cloud-Native 5G Fault Detection — Reproduction Pack
 
-Everything needed to stand up the platform and run the fault-injection experiments
-that produce the raw telemetry for the fault atlas study.
+Covers the **C-fault-detection experiment (RQ3)**: Can existing anomaly detection algorithms accurately detect faults in cloud-native 5G core networks using logs, metrics, and traces?
 
-This pack only covers **platform setup + data collection**. Analysis is out of scope here.
+> **Extended notes:** [`EXTENSIONS.md`](./EXTENSIONS.md) — extra collectors, traffic generators, per-fault hooks, pipeline hardening (2026-05-16).
 
-> **Extended setup notes:** See [`EXTENSIONS.md`](./EXTENSIONS.md) for the full
-> list of changes added on top of this base — extra signal collectors (Loki,
-> K8s events, NRF API, RTT), synthetic traffic generators, per-fault hooks,
-> bug fixes encountered during bring-up, and the Phase-3 fault dispatch.
->
-> ⚠️ **Current state (2026-05-16): read [`EXTENSIONS.md` §10](./EXTENSIONS.md#10-pipeline-hardening--2026-05-16) first.**
-> It supersedes several numbers below — the pipeline now runs **22 faults**,
-> default durations are **600/300/300** (no env vars needed), `run_all.sh`
-> does a **full cluster recreate per fault** (soft-reset is shelved), bring-up
-> is gated on strict 10/10 readiness, Loki collection is **paginated** (the
-> 5000-line cap is gone) with Beyla logs excluded, and **every teammate must
-> create their own gitignored `kind/.dockerhub-auth`** (username + read-only
-> PAT, two lines) or the cluster will hit Docker Hub pull rate limits.
+---
+
+## Quick Start
+
+```bash
+# Full pipeline: cluster + 22 faults + model evaluation + figures (~12 h)
+./cluster-start.sh                                         # bring up cluster    (~15 min)
+./experiments/C-fault-detection/run_all.sh                 # collect 22 faults   (~8 h)
+python models/logs/evaluate.py     --multi-run             # log model eval       (~30 min)
+python models/metrics/evaluate.py  --multi-run             # metric model eval    (~45 min)
+python models/traces/evaluate.py   --multi-run             # trace model eval     (~30 min)
+python visualizations/logs/run_all.py                      # log figures
+python visualizations/metrics/run_all.py                   # metric figures
+python visualizations/robustness/run_sweep.py              # robustness figures
+```
+
+Figures → `models/*/out/`, `visualizations/*/out/`.
+
+> **Docker Hub auth:** create `kind/.dockerhub-auth` (two lines: username + read-only PAT) to avoid the 100/6h unauthenticated pull-rate limit. The cluster start script injects it automatically.
 
 ---
 
 ## 1. Stack
 
-| Layer           | Tool                                     | Version       | Why this one                                                                                                                                                                                                                                          |
-| --------------- | ---------------------------------------- | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 5G core         | Open5GS (Gradiant Helm chart)            | 2.3.4         | Most complete OSS 5G core; all SBI NFs as separate pods → clean per-NF fault targeting                                                                                                                                                                |
-| RAN sim         | UERANSIM gNB + UEs (Gradiant Helm chart) | 0.2.6 / 0.1.2 | Standard pairing for Open5GS; works headless in k8s                                                                                                                                                                                                   |
-| Orchestration   | kind (Kubernetes in Docker)              | latest        | Single-host k8s, no cloud dependency, fast teardown                                                                                                                                                                                                   |
-| Metrics         | kube-prometheus-stack                    | latest        | Bundles Prometheus + Grafana + node_exporter + cAdvisor + kube-state-metrics                                                                                                                                                                          |
-| Logs            | Loki + Promtail                          | latest        | Promtail DaemonSet ships every pod's stdout to Loki; no app changes                                                                                                                                                                                   |
-| Traces          | Jaeger (all-in-one, in-memory)           | v4.7.0        | No code changes; in-mem is fine for short experiment windows                                                                                                                                                                                          |
-| Span source     | Beyla (eBPF auto-instrumentation)        | ≥ 3.9.5       | Hooks at kernel socket layer, sees Open5GS HTTP/2 prior-knowledge SBI calls. **Istio sidecars don't work** (Envoy can't proxy raw HTTP/2 without TLS/ALPN). 3.9.5+ is required — earlier versions hit the kernel verifier's 1M-instruction BPF limit. |
-| Fault injection | Chaos Mesh                               | 2.7.2         | Native k8s CRDs (StressChaos / PodChaos / NetworkChaos), no test-harness code                                                                                                                                                                         |
-| Collection      | Python 3 + `requests`                    | —             | `experiments/collect.py` queries Prometheus / Loki / Jaeger HTTP APIs                                                                                                                                                                                 |
-
-### Key design decisions
-
-- **kind, not minikube/k3d.** Multi-node out of the box via `kind-config.yaml`; containerd socket at `/run/containerd/containerd.sock` integrates cleanly with Chaos Mesh.
-- **Indirect SBI (Model D) via SCP.** All NF-to-NF SBI traffic in Open5GS goes through the SCP. AMF never talks directly to NRF, so the network-partition experiment targets **AMF↔SCP**, not AMF↔NRF.
-- **Synthetic traffic during every run.** Without traffic, a fault produces no observable signal. `run_experiment.sh` runs continuous data-plane pings (UE TUN → 8.8.8.8 via UPF) and a control-plane re-registration loop (4 UEs cycling deregister/register every 15s, exercising NGAP + AMF + AUSF + UDM + NRF + SCP).
-- **4-phase model.** Each experiment: baseline 600s → inject → fault 300s → recovery 300s. Each phase is collected separately so deltas vs baseline are computable.
-- **Pod-level memory metric for memory-pressure.** StressChaos memory runs in chaos-daemon's cgroup, _not_ the target container's. We additionally allocate memory **inside** the UPF container (perl trick in `run_experiment.sh`) to actually hit the 128Mi limit and trigger an OOM kill.
-- **RTT collection for network-delay/partition.** Chaos Mesh applies delay at the TC kernel layer; Beyla eBPF sits above TC and is blind to it. The script runs `ping AMF→SCP` during the fault phase as the only way to confirm the delay.
-- **Resource limits enforced on every NF.** Without limits, CPU stressors don't throttle and memory stressors don't OOM. Limits are set in `k8s/open5gs-values.yaml` (AMF/UPF 128 Mi & 500m; NRF 64 Mi & 200m; etc).
-- **inotify limits raised.** Chaos Mesh controller and Promtail both consume many inotify watches; the kernel default crashes them.
+| Layer           | Tool                                     | Version       |
+| --------------- | ---------------------------------------- | ------------- |
+| 5G core         | Open5GS (Gradiant Helm chart)            | 2.3.4         |
+| RAN sim         | UERANSIM gNB + UEs (Gradiant Helm chart) | 0.2.6 / 0.1.2 |
+| Orchestration   | kind (Kubernetes in Docker)              | latest        |
+| Metrics         | kube-prometheus-stack                    | latest        |
+| Logs            | Loki + Promtail                          | latest        |
+| Traces          | Jaeger (all-in-one, in-memory)           | v4.7.0        |
+| Span source     | Beyla (eBPF auto-instrumentation)        | ≥ 3.9.5       |
+| Fault injection | Chaos Mesh                               | 2.7.2         |
+| Collection      | Python 3 + `requests`                   | —             |
 
 ---
 
 ## 2. Host prerequisites (Linux + Docker)
 
-- Docker installed and running (Docker 29 with nftables works; see iptables note in §6).
-- Raise inotify limits — required for Promtail + Chaos Mesh controller, otherwise both crash with `too many open files`:
+- Docker 29+ installed and running.
+- Raise inotify limits (required for Promtail + Chaos Mesh, otherwise both crash):
 
 ```bash
 sudo sysctl fs.inotify.max_user_instances=512
 sudo sysctl fs.inotify.max_user_watches=524288
 
-# Persist across reboots
-echo "fs.inotify.max_user_instances=512"   | sudo tee -a /etc/sysctl.conf
-echo "fs.inotify.max_user_watches=524288"  | sudo tee -a /etc/sysctl.conf
+echo "fs.inotify.max_user_instances=512"  | sudo tee -a /etc/sysctl.conf
+echo "fs.inotify.max_user_watches=524288" | sudo tee -a /etc/sysctl.conf
 ```
 
-- Python 3 with `requests`:
+- Python 3.10+:
 
 ```bash
-pip install --user requests
+pip install torch numpy scikit-learn requests
 ```
 
 ---
@@ -88,214 +81,130 @@ sudo mv linux-amd64/helm /usr/local/bin/helm && rm -rf linux-amd64
 
 ---
 
-## 4. Create the cluster
+## 4. Daily lifecycle — `./cluster-start.sh`
+
+After every reboot or Docker restart:
 
 ```bash
-kind create cluster --config k8s/kind-config.yaml
-
-kubectl get nodes   # expect: open5gs-control-plane, open5gs-worker, open5gs-worker2 all Ready
+./cluster-start.sh              # recreate cluster + redeploy everything (~15 min)
+./cluster-start.sh --skip-deploy  # recreate cluster only
 ```
 
-Flag rationale (set in `k8s/kind-config.yaml`):
+The script deletes and recreates the kind cluster, checks/raises inotify limits, redeploys the full stack (Open5GS, UERANSIM, kube-prometheus-stack, Loki, Jaeger, Beyla, Chaos Mesh), and sanity-checks all namespaces. kind has no start/stop — when Docker stops, recreate with this script.
 
-- `evictionHard: nodefs.available: "5%"` — kind nodes share host disk; default ~10–15% threshold trips DiskPressure on a moderately full disk and blocks pod scheduling.
+**Don't restart Docker while experiments are running.**
 
 ---
 
-## 5. Deploy everything (run from the repo root containing this `reproduce/` folder)
+## 5. Run the fault detection experiment
 
 ```bash
-cd reproduce
-
-# ── Open5GS ───────────────────────────────────────────────────────────────────
-kubectl create namespace open5gs
-helm install open5gs oci://registry-1.docker.io/gradiantcharts/open5gs \
-  --version 2.3.4 \
-  --namespace open5gs \
-  -f k8s/open5gs-values.yaml \
-  --wait --timeout=10m
-
-# Optional: webui pod isn't needed for experiments
-kubectl delete deployment -n open5gs open5gs-webui --ignore-not-found
-
-# ── UERANSIM gNB + UEs ───────────────────────────────────────────────────────
-helm install ueransim-gnb oci://registry-1.docker.io/gradiant/ueransim-gnb \
-  --version 0.2.6 --namespace open5gs \
-  --values https://gradiant.github.io/5g-charts/docs/open5gs-ueransim-gnb/gnb-ues-values.yaml \
-  --wait --timeout=5m
-
-helm install ueransim-ues oci://registry-1.docker.io/gradiant/ueransim-ues \
-  --version 0.1.2 --namespace open5gs \
-  --values https://gradiant.github.io/5g-charts/docs/open5gs-ueransim-gnb/gnb-ues-values.yaml \
-  --wait --timeout=5m
-
-# Sanity check — should print "PDU Session establishment is successful"
-kubectl logs -n open5gs deployment/ueransim-ues | grep -i "PDU Session"
-kubectl exec  -n open5gs deployment/ueransim-ues -- ping -I uesimtun0 -c 3 8.8.8.8
-
-# ── Observability stack ──────────────────────────────────────────────────────
-helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
-helm repo add grafana               https://grafana.github.io/helm-charts
-helm repo add jaegertracing         https://jaegertracing.github.io/helm-charts
-helm repo update
-
-kubectl create namespace monitoring
-
-helm install kube-prom prometheus-community/kube-prometheus-stack \
-  --namespace monitoring \
-  --set grafana.adminPassword=admin \
-  --set prometheus.prometheusSpec.scrapeInterval=5s \
-  --timeout=10m
-
-helm install loki grafana/loki-stack \
-  --namespace monitoring \
-  --set promtail.enabled=true \
-  --set loki.persistence.enabled=false \
-  --set grafana.enabled=false   # avoid datasource conflict with kube-prom's Grafana
-
-helm install jaeger jaegertracing/jaeger \
-  --namespace monitoring \
-  --set allInOne.enabled=true \
-  --set storage.type=memory \
-  --set agent.enabled=false --set collector.enabled=false --set query.enabled=false \
-  --timeout=5m
-
-# Beyla DaemonSet (eBPF tracer → Jaeger)
-kubectl apply -f k8s/monitoring/beyla-daemonset.yaml
-
-# ── Chaos Mesh ───────────────────────────────────────────────────────────────
-helm repo add chaos-mesh https://charts.chaos-mesh.org
-helm repo update
-
-helm install chaos-mesh chaos-mesh/chaos-mesh \
-  --namespace chaos-mesh --create-namespace \
-  --version 2.7.2 \
-  --set chaosDaemon.runtime=containerd \
-  --set chaosDaemon.socketPath=/run/containerd/containerd.sock
-# kind uses containerd directly at /run/containerd/containerd.sock
-
-# ── Verify ───────────────────────────────────────────────────────────────────
-kubectl get pods -n open5gs
-kubectl get pods -n monitoring
-kubectl get pods -n chaos-mesh
+./experiments/C-fault-detection/run_all.sh              # all 22 faults sequentially (~8 h)
+./experiments/C-fault-detection/run_all.sh --from 10    # resume from fault 10
+./experiments/C-fault-detection/run_all.sh --only 3,7   # run specific faults
 ```
 
-Add Loki and Jaeger as Grafana datasources (Prometheus is already default):
+Each fault runs three phases (600 s pre → 300 s fault → 300 s post) with full telemetry collection: Prometheus (41 KPIs), Loki (paginated, no cap), Jaeger (up to 20 000 traces/service/phase), NRF API snapshots, and K8s events.
 
-```bash
-kubectl port-forward -n monitoring deployment/kube-prom-grafana 3000:3000
-# → http://localhost:3000  (admin / admin)
-#   Connections → Data sources → Add:
-#     Loki    http://loki.monitoring.svc.cluster.local:3100
-#     Jaeger  http://jaeger.monitoring.svc.cluster.local:16686
-```
+Output: `data/experiments/C-fault-detection/<fault>/run_NN/{pre,fault,post}/`
+
+### Fault catalogue
+
+| # | Fault | Class | Target | Notes |
+|---|-------|-------|--------|-------|
+| 01 | cpu-stress-amf | Resource | AMF | StressChaos saturates 500m CPU limit |
+| 02 | memory-pressure-upf | Resource/Crash | UPF | StressChaos + in-pod 150 MB alloc → OOM kill |
+| 03 | pod-crash-amf | Crash | AMF | Tears down gNB SCTP; auto-restarts gNB+UEs in post |
+| 04 | network-delay-gnb-amf | Network | AMF↔gNB, 500 ms | Invisible to Beyla; RTT confirmed via ping |
+| 05 | network-partition-amf-scp | Network | AMF↔SCP | Targets SCP — all SBI goes through SCP (Model D) |
+| 06 | packet-loss-upf | Network | UPF | Data-plane packet loss |
+| 07 | pod-crash-smf | Crash | SMF | Stale PFCP; auto-restarts SMF in post |
+| 08 | cpu-stress-scp | Resource | SCP | SBI routing bottleneck |
+| 09 | network-delay-nrf | Network | NRF, 500 ms | Slow NF discovery |
+| 10 | pfcp-flood | Protocol attack | UPF | Session establishment flood |
+| 11 | pfcp-deletion | Protocol attack | UPF | Spurious session deletions |
+| 12 | pfcp-drop | Protocol attack | UPF | Session modification drops |
+| 13 | pfcp-duplication | Protocol attack | UPF | Session modification duplications |
+| 14 | upf-infra-packet-loss | Network | UPF node | Infrastructure-level loss |
+| 15 | nrf-cascade | Dependency | NRF kill | NF re-registration cascade; 30 s recovery wait |
+| 16 | cpu-stress-ausf | Resource | AUSF | Auth bottleneck |
+| 17 | network-delay-scp | Network | SCP, 500 ms | SBI routing latency |
+| 18 | cpu-stress-nrf | Resource | NRF | Discovery bottleneck |
+| 19 | udm-pod-crash | Crash | UDM | Subscription data unavailable |
+| 20 | mongodb-pod-kill | Crash | MongoDB | Backing store for UDR/UDM |
+| 21 | n2-partition-amf-gnb | Network | AMF↔gNB | N2 interface severed |
+| 22 | memory-pressure-amf | Resource | AMF | OOM pressure on control plane |
 
 ---
 
-## 6. Daily lifecycle — `./cluster-start.sh`
+## 6. Train and evaluate anomaly detection models
 
-After every reboot or Docker restart, run:
+All three evaluate scripts share the same interface. Results are written to `models/*/out/`.
 
 ```bash
-./cluster-start.sh              # recreate cluster + redeploy everything (~10–15 min)
-./cluster-start.sh --skip-deploy  # recreate cluster only, deploy manually afterwards
+# Standard evaluation (all available runs merged)
+python models/logs/evaluate.py    --multi-run
+python models/metrics/evaluate.py --multi-run
+python models/traces/evaluate.py  --multi-run
+
+# Robustness: feature dropout and Gaussian noise (metrics + traces)
+python models/metrics/evaluate.py --dropout 5g_control
+python models/metrics/evaluate.py --noise-std 0.1
+python models/traces/evaluate.py  --dropout latency
+python models/traces/evaluate.py  --noise-std 0.1
 ```
 
-It does five things:
+### Models
 
-1. **Pre-creates `DOCKER-ISOLATION-STAGE-{1,2}` iptables chains.** Docker 29 (nftables backend) sometimes drops these on dirty restart, then all Docker network creation fails.
-2. **Deletes and recreates the kind cluster** (`kind delete cluster` + `kind create cluster --config k8s/kind-config.yaml`). This is always a clean slate — no stale state from the previous run.
-3. **Checks and raises inotify limits** if below the required thresholds (512 instances / 524288 watches). Promtail and Chaos Mesh controller both crash without these.
-4. **Redeploys the full stack** (Open5GS, UERANSIM, kube-prometheus-stack, Loki, Jaeger, Beyla, Chaos Mesh) unless `--skip-deploy` is passed.
-5. **Sanity-checks** all three namespaces.
+**Logs** — input: Drain-parsed template sequences (30 s windows per NF)
 
-> **Note:** kind has no `cluster start/stop` command. The cluster lives as Docker containers; when Docker stops (reboot, `docker restart`), those containers stop. The only safe recovery is to recreate — hence Option A.
+| Model | Method | Reference |
+|-------|--------|-----------|
+| DeepLog | LSTM next-key prediction | Du et al., CCS 2017 |
+| LogBERT | MLM Transformer | Guo et al., BigData 2021 |
+| LogRobust | BiLSTM + attention autoencoder | Zhang et al., WWW 2019 (adapted unsupervised) |
+| Logs2Graphs | DiGCN + Deep SVDD | Li et al., ICSE 2024 |
+| FeatureModel | Heartbeat-aware Isolation Forest | This work |
 
-**Don't restart Docker while experiments are running** — it will corrupt the cluster state. Stop experiments first.
+**Metrics** — input: 41 Prometheus KPIs (5 s scrape, 60 s windows)
+
+| Model | Method | Reference |
+|-------|--------|-----------|
+| MetricPCA | PCA reconstruction error | Xu et al., 2009 |
+| USAD | Dual AE adversarial training | Audibert et al., KDD 2020 |
+| TranAD | Transformer + 2-decoder | Tuli et al., VLDB 2022 |
+| OmniAnomaly | GRU + VAE | Su et al., KDD 2019 |
+| AnomalyTransformer | Series/prior association | Xu et al., ICLR 2022 |
+
+**Traces** — input: per-service span features (span count, error rate, latency p50/p95/p99) over 60 s windows
+
+| Model | Method | Reference |
+|-------|--------|-----------|
+| TraceRPCA | Robust PCA (inexact ALM) | Candès et al., 2011 |
+| TraceAnomaly | Real NVP normalizing flow | Liu et al., ISSRE 2020 |
+| GAL-MAD | GAT + BiLSTM | Attanayake et al., arXiv 2504.00058 |
+| TraceDAE | Dual AE with GAT | Li et al., TNSM 2025 |
+| TraceSieve | VGAE + GAN noise filter | Zhang et al., ISSRE 2023 |
+
+Evaluation metrics: AUROC, Average Precision (PR-AUC), Recall@optimal-F1. All threshold-free.
 
 ---
 
-## 7. Run experiments
-
-Run all 8 sequentially (each takes ~20 min: 600 + 300 + 300 + overhead):
+## 7. Generate figures
 
 ```bash
-bash experiments/run_all.sh 1 > experiments/run1.log 2>&1 &
-tail -f experiments/run1.log
+python visualizations/logs/run_all.py                        # log feature heatmap, clustering, templates, timeline
+python visualizations/metrics/run_all.py                     # metric delta heatmap, timelines, fault-class profiles
+python visualizations/robustness/run_sweep.py                # noise curves, dropout heatmaps
+python visualizations/cross_modality/01_cross_modality_coverage.py
+python visualizations/feature_importance/01_feature_importance.py
 ```
 
-Or one at a time:
-
-```bash
-BASELINE_DURATION=600 FAULT_DURATION=300 RECOVERY_DURATION=300 \
-  bash experiments/run_experiment.sh <fault_name> k8s/chaos/<file>.yaml <run_number>
-```
-
-### What each experiment does
-
-| #   | Fault name               | YAML                                | Class            | Target          | Notes                                                          |
-| --- | ------------------------ | ----------------------------------- | ---------------- | --------------- | -------------------------------------------------------------- |
-| 1   | `cpu-stress-amf`         | `01-cpu-stress-amf.yaml`            | Resource         | AMF             | StressChaos saturates AMF's 500m CPU limit                     |
-| 2   | `memory-pressure-upf`    | `02-memory-pressure-upf.yaml`       | Resource / Crash | UPF             | StressChaos + in-container 150 MB allocation → OOM kill        |
-| 3   | `pod-crash-amf`          | `03-pod-crash-amf.yaml`             | Crash            | AMF             | Tears down gNB SCTP — script auto-restarts gNB+UEs in recovery |
-| 4   | `pod-crash-smf`          | `07-pod-crash-smf.yaml`             | Crash            | SMF             | Stale PFCP — script auto-restarts SMF in recovery              |
-| 5   | `network-delay`          | `04-network-delay-gnb-amf.yaml`     | Network          | AMF→SCP, 500 ms | Invisible to Beyla; RTT confirmed via ping                     |
-| 6   | `network-partition`      | `05-network-partition-amf-scp.yaml` | Network          | AMF↔SCP         | Target is SCP, not NRF (Model D indirect SBI)                  |
-| 7   | `dependency-failure-nrf` | `06-dependency-failure-nrf.yaml`    | Dependency       | NRF (kill)      | Recovery waits 30 s for NF re-registration                     |
-| 8   | `network-delay-nrf`      | `08-network-delay-nrf.yaml`         | Slow dependency  | NRF, 500 ms     | Gradual SBI latency vs hard kill                               |
-
-### What happens during a run
-
-`run_experiment.sh` per experiment:
-
-1. Starts `kubectl port-forward` for Prometheus :9090, Jaeger :16686, Loki :3100.
-2. Starts traffic generators inside the UE pod:
-   - data-plane: 10 parallel `ping`s through `uesimtun0..9` → 8.8.8.8;
-   - control-plane: re-registration loop (4 UEs deregister/register every 20 s).
-3. **Baseline** (600 s) → `collect.py --phase baseline`.
-4. **Inject**: `kubectl apply` the chaos YAML. For memory-pressure, also exec a 150 MB perl alloc inside the UPF container.
-5. **Fault** (300 s) → optional ping RTT collection (network-delay/partition only) → `collect.py --phase fault`.
-6. **Recovery**: `kubectl delete` the chaos resource (with finalizer-patching fallback if it hangs); fault-specific NF restart (SMF after UPF OOM, gNB+UEs after AMF kill, etc.); wait 300 s → `collect.py --phase recovery`.
-7. Writes `timestamps.json` with all phase boundaries.
-
-### What gets collected (per phase)
-
-`experiments/collect.py` queries each backend's HTTP API and writes JSON to
-`experiments/data/<fault>/run_NN/<phase>/`:
-
-- **Prometheus** (one file per metric): CPU usage/throttle rates, container & pod memory, pod restarts, ready/running counts, OOM events, UE TUN RX/TX bytes.
-- **Loki** (one file per query): all logs in `open5gs` namespace (Beyla excluded); targeted error queries; NRF heartbeat lifecycle; UE-visible failures (Registration reject, etc.); SCP routing errors. **Cursor-paginated — no line cap** (see EXTENSIONS §10.5).
-- **Jaeger**: services list + up to 20000 traces per service per phase (raised from 2000; see EXTENSIONS §10.7).
-- **NRF API snapshot**: registered NF instance counts per NF type (drops to 0 during NRF kill).
-- **K8s Events**: `kubectl get events -n open5gs` filtered to the phase window. The collector filters out two known noise sources: `open5gs-populate` (permanent CrashLoopBackOff since cluster init) and `FailedGetScale` from a misconfigured HPA targeting a non-existent StatefulSet.
-- **`fault/rtt_samples.txt`** for network-delay/partition only.
-
-Output layout:
-
-```
-experiments/data/<fault-name>/run_NN/
-├── timestamps.json
-├── baseline/    prometheus/  loki/  jaeger/  k8s_events.json  nrf_registrations.json
-├── fault/       (same +)    rtt_samples.txt   (for network experiments)
-└── recovery/   prometheus/  loki/  jaeger/  k8s_events.json  nrf_registrations.json
-```
+All figures land in `visualizations/*/out/`.
 
 ---
 
-## 8. Known limitations / gotchas
-
-- **`pod_status_ready` misses brief crashes.** Prometheus scrapes every 5–15 s; pod restarts often complete in 10–50 s. Use the memory drop or `kube_pod_container_status_restarts_total` instead.
-- **StressChaos memory ≠ container memory.** stress-ng runs in chaos-daemon's cgroup. `container_memory_*` for the target won't budge unless you also force allocation inside the target (we do this for UPF in `run_experiment.sh`).
-- **Beyla can't see TC-layer network delay.** Jaeger spans look normal even with 500 ms confirmed. Ping RTT samples are the only signal.
-- **Jaeger in-memory storage.** No persistence across pod restart. Collection must happen while port-forwards are active — collected at end-of-phase before tearing down.
-- ~~**Loki 5000-line cap per query.**~~ **Resolved (2026-05-16)** — `collect_loki.py` now cursor-paginates; no cap, no undercount. See EXTENSIONS §10.5.
-- **Signal caveats** (use the right metric): `upf_session_nbr`/`upf_qos_flows` over-count — use `pfcp_sessions_active`/`smf_ues_active`; GTP N3 packet counters and AMF `rm_regtime` are not exported by this build; control-plane workload is light so AMF/registration faults are under-stimulated. Full list: EXTENSIONS §10.10.
-- **K8s Events background noise.** `open5gs-populate` (permanent CrashLoop) and HPA `FailedGetScale` are filtered in `collect.py`; if you add NFs, watch for new noise.
-- **Network-partition target = SCP.** Open5GS uses indirect SBI (Model D). AMF↔NRF directly partition has zero effect — everything goes via SCP.
-
----
-
-## 9. Recovery procedures (run if something is wedged)
+## 8. Recovery
 
 ```bash
 # UPF after OOM (clears stale PFCP)
@@ -309,7 +218,7 @@ kubectl exec -n open5gs deployment/ueransim-gnb-ues -- ping -I uesimtun0 -c 3 8.
 kubectl get pods -n open5gs
 ```
 
-If `kubectl delete` of a chaos resource hangs, patch the finalizers (the script does this automatically after 15 s):
+If `kubectl delete` of a chaos resource hangs, patch the finalizers (the run script does this automatically after 15 s):
 
 ```bash
 kubectl patch <kind>/<name> -n open5gs --type=json \
@@ -318,28 +227,60 @@ kubectl patch <kind>/<name> -n open5gs --type=json \
 
 ---
 
-## 10. File map
+## 9. File map
 
 ```
-reproduce/
-├── README.md                    ← this file
-├── cluster-start.sh             ← daily lifecycle (recreate cluster + redeploy)
-├── k8s/
-│   ├── kind-config.yaml         ← kind cluster config: 3 nodes, eviction thresholds
-│   ├── open5gs-values.yaml      ← Helm values: NF resource limits, MCC/MNC, slice id
+.
+├── cluster-start.sh                  ← daily lifecycle (recreate cluster + redeploy)
+├── kind/
+│   ├── kind-config.yaml              ← 3-node kind cluster, eviction thresholds
+│   ├── open5gs-values.yaml           ← NF resource limits, MCC/MNC, slice config
 │   ├── monitoring/
-│   │   └── beyla-daemonset.yaml ← eBPF tracer DaemonSet (privileged, hostPID)
-│   └── chaos/
-│       ├── 01-cpu-stress-amf.yaml
-│       ├── 02-memory-pressure-upf.yaml
-│       ├── 03-pod-crash-amf.yaml
-│       ├── 04-network-delay-gnb-amf.yaml
-│       ├── 05-network-partition-amf-scp.yaml
-│       ├── 06-dependency-failure-nrf.yaml
-│       ├── 07-pod-crash-smf.yaml
-│       └── 08-network-delay-nrf.yaml
-└── experiments/
-    ├── run_all.sh               ← all 8 experiments sequentially
-    ├── run_experiment.sh        ← one experiment, 4-phase, with traffic + RTT
-    └── collect.py               ← Prometheus + Loki + Jaeger + K8s events fetcher
+│   │   └── beyla-daemonset.yaml      ← eBPF tracer DaemonSet (privileged, hostPID)
+│   └── chaos/                        ← 22 Chaos Mesh YAMLs (one per fault)
+├── experiments/
+│   ├── lib/                          ← shared shell + Python helpers (Loki/Prom/Jaeger collection, health checks)
+│   └── C-fault-detection/
+│       └── run_all.sh                ← 22-fault orchestrator (--from N, --only N,M)
+├── models/
+│   ├── logs/
+│   │   ├── data_loader.py            ← Loki JSON → LogRecord, Drain parsing, vocab
+│   │   ├── log_parser.py             ← self-contained Drain implementation
+│   │   ├── evaluate.py               ← train + eval all log models, write out/
+│   │   ├── plot_results.py           ← AUROC/F1/recall heatmaps from eval_results.json
+│   │   ├── deeplog_model.py
+│   │   ├── logbert_model.py
+│   │   ├── logrobust_model.py
+│   │   ├── logs2graphs_model.py
+│   │   ├── feature_model.py
+│   │   └── out/                      ← eval_results*.json, heatmap PNGs
+│   ├── metrics/
+│   │   ├── data_loader.py            ← Prometheus JSON → MetricRecord (41 KPIs)
+│   │   ├── evaluate.py               ← train + eval all metric models, write out/
+│   │   ├── plot_results.py
+│   │   ├── pca_model.py
+│   │   ├── usad_model.py
+│   │   ├── tranad_model.py
+│   │   ├── omnianomaly_model.py
+│   │   ├── anomaly_transformer_model.py
+│   │   └── out/                      ← eval_results*.json, dropout/noise variants
+│   └── traces/
+│       ├── data_loader.py            ← Jaeger JSON → TraceRecord (per-service features)
+│       ├── evaluate.py               ← train + eval all trace models, write out/
+│       ├── plot_results.py
+│       ├── rpca_model.py
+│       ├── trace_anomaly_model.py
+│       ├── galmad_model.py
+│       ├── tracedae_model.py
+│       ├── tracesieve_model.py
+│       └── out/                      ← eval_results*.json, dropout/noise variants
+├── visualizations/
+│   ├── logs/                         ← feature heatmap, clustering, template dist, timeline
+│   ├── metrics/                      ← delta heatmap, timelines, fault-class profiles
+│   ├── robustness/                   ← noise curves, feature dropout heatmaps
+│   ├── cross_modality/               ← coverage overlap, optimal model combinations
+│   └── feature_importance/           ← Prometheus KPI importance by fault class
+└── analysis/
+    ├── lib.py                        ← EXPERIMENTS registry (22 faults, fault classes)
+    └── run_all.py
 ```
