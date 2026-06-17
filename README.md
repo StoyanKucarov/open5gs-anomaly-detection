@@ -164,7 +164,7 @@ python models/traces/evaluate.py  --noise-std 0.1
 | LogBERT | MLM Transformer | Guo et al., BigData 2021 |
 | LogRobust | BiLSTM + attention autoencoder | Zhang et al., WWW 2019 (adapted unsupervised) |
 | Logs2Graphs | DiGCN + Deep SVDD | Li et al., ICSE 2024 |
-| FeatureModel | Heartbeat-aware Isolation Forest | This work |
+| FeatureModel | Heartbeat-aware Isolation Forest | Monika Steidl et al., IEEE 2024s |
 
 **Metrics** — input: 41 Prometheus KPIs (5 s scrape, 60 s windows)
 
