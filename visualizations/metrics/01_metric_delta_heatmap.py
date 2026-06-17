@@ -4,17 +4,7 @@ visualizations/metrics/01_metric_delta_heatmap.py
 
 Per-fault metric delta heatmap.
 
-For each fault and each metric, computes the normalised shift:
-    δ = (during_mean - pre_mean) / max(pre_std, ε)
-
-A positive δ means the metric increased during the fault; negative means it
-dropped.  Large |δ| = the metric is "acting out" for that fault.
-
-Metrics are grouped by category (CPU, Memory, Network, 5G, Pod) and rows use
-a diverging colormap centred at 0.  Fault columns are coloured by fault class.
-
-Usage:
-  python 01_metric_delta_heatmap.py [--data PATH] [--out PATH]
+Usage: python 01_metric_delta_heatmap.py [--data PATH] [--out PATH]
 """
 
 import argparse
@@ -45,8 +35,6 @@ FAULT_CLASS_COLORS = {
 # Metrics to exclude — monitoring/sidecar overhead, not 5G NF signals
 _EXCLUDE = {"cpu_beyla", "cpu_monitoring", "mem_beyla", "mem_monitoring"}
 
-# Metric groups for visual grouping (row separators in the heatmap).
-# Every non-excluded metric must appear in exactly one group.
 METRIC_GROUPS = {
     "Queries / HTTP": [
         "http_server_req_rate", "http_client_req_rate",
@@ -73,7 +61,7 @@ METRIC_GROUPS = {
 
 # Excluded metrics are dropped entirely; every remaining metric must be in a group.
 _ORDERED: list[str] = []
-_GROUP_BOUNDS: list[tuple[int, str]] = []   # (first_row_index, group_name)
+_GROUP_BOUNDS: list[tuple[int, str]] = []   
 for _grp, _mets in METRIC_GROUPS.items():
     _GROUP_BOUNDS.append((len(_ORDERED), _grp))
     _ORDERED.extend([m for m in _mets if m in FEATURE_NAMES and m not in _EXCLUDE])
@@ -145,8 +133,6 @@ def main():
     matrix  = np.array([[deltas[i].get(m, np.nan) for m in _ORDERED] for i in order],
                        dtype=float).T   # (n_metrics, n_faults)
 
-    # Drop rows with no meaningful signal across any fault.
-    # Threshold: max |delta| < 0.15 means the metric never moves visibly.
     MIN_SIGNAL = 0.15
     row_max    = np.nanmax(np.abs(matrix), axis=1)  # (n_metrics,)
     keep_mask  = row_max >= MIN_SIGNAL
