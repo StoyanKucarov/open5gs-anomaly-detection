@@ -1,6 +1,6 @@
 # Cloud-Native 5G Fault Detection — Reproduction Pack
 
-Covers the **C-fault-detection experiment (RQ3)**: Can existing anomaly detection algorithms accurately detect faults in cloud-native 5G core networks using logs, metrics, and traces?
+Covers the **C-fault-detection experiment (RQ3)**: Assessing machine learning-based anomaly detection across individual telemetry modalities, including logs, metrics, and traces.
 
 > **Extended notes:** [`EXTENSIONS.md`](./EXTENSIONS.md) — extra collectors, traffic generators, per-fault hooks, pipeline hardening (2026-05-16).
 
